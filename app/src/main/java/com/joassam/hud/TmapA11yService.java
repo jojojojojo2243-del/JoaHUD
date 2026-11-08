@@ -29,6 +29,10 @@ public class TmapA11yService extends AccessibilityService {
     static final String TMAP = "com.skt.tmap.ku";
     static volatile boolean connected = false;
     static volatile String status = "";
+    static volatile long lastAaData = 0;   // 안드로이드 오토 화면에서 읽은 마지막 시각
+    private long lastLog = 0;
+    private static final java.util.regex.Pattern DIST_ONLY =
+            java.util.regex.Pattern.compile("^\\s*\\d+(?:[.,]\\d+)?\\s*(m|km)\\s*$", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService work = Executors.newSingleThreadExecutor();
@@ -71,9 +75,12 @@ public class TmapA11yService extends AccessibilityService {
             status = "안드로이드 11 이상 필요";
             return;
         }
+        // 1순위: 안드로이드 오토(차량 화면)에 그려진 티맵 안내 카드
+        if (scanAndroidAuto()) return;
+        // 2순위: 폰 화면 위 티맵 미니 안내판
         final Rect r = findTmapWidget();
         if (r == null) {
-            status = "티맵 미니 안내가 화면에 없음";
+            status = "티맵 안내를 찾는 중 (차량 화면/미니 안내 모두 없음)";
             return;
         }
         busy = true;
@@ -113,6 +120,131 @@ public class TmapA11yService extends AccessibilityService {
         } catch (Throwable t) {
             busy = false;
             status = "캡처 불가: " + t.getMessage();
+        }
+    }
+
+    /**
+     * 차량 화면(안드로이드 오토는 폰 안의 별도 디스플레이)에서
+     * '720m' 같은 거리 글자를 찾아 그 안내 카드를 읽고, 가능하면 캡처까지.
+     */
+    private boolean scanAndroidAuto() {
+        if (Build.VERSION.SDK_INT < 30) return false;
+        try {
+            android.util.SparseArray<List<AccessibilityWindowInfo>> all = getWindowsOnAllDisplays();
+            StringBuilder diag = new StringBuilder();
+            for (int i = 0; i < all.size(); i++) {
+                int displayId = all.keyAt(i);
+                if (displayId == Display.DEFAULT_DISPLAY) continue;
+                for (AccessibilityWindowInfo w : all.valueAt(i)) {
+                    AccessibilityNodeInfo root = w.getRoot();
+                    if (root == null) continue;
+                    Rect wb = new Rect();
+                    w.getBoundsInScreen(wb);
+                    diag.append("[화면").append(displayId).append(' ').append(root.getPackageName()).append("] ");
+                    AccessibilityNodeInfo distNode = findDist(root, diag, 0);
+                    if (distNode == null) continue;
+                    // 거리 글자를 감싸는 안내 카드 범위 찾기
+                    long winArea = Math.max(1L, (long) wb.width() * wb.height());
+                    AccessibilityNodeInfo card = distNode;
+                    Rect cardB = new Rect();
+                    distNode.getBoundsInScreen(cardB);
+                    AccessibilityNodeInfo p = distNode.getParent();
+                    while (p != null) {
+                        Rect b = new Rect();
+                        p.getBoundsInScreen(b);
+                        if ((long) b.width() * b.height() > winArea * 0.35) break;
+                        card = p;
+                        cardB = b;
+                        p = p.getParent();
+                    }
+                    StringBuilder txt = new StringBuilder();
+                    collect(card, txt, 0);
+                    NavData d = new NavData();
+                    d.pkg = "aa";
+                    d.dist = NavParser.detectDist(java.util.Collections.singletonList(distNode.getText().toString()));
+                    d.dir = NavParser.detectDir(txt.toString());
+                    String rest = txt.toString().replace(distNode.getText().toString(), "").replace("|", " ").trim();
+                    d.text = rest.length() > 30 ? rest.substring(0, 30) : rest;
+                    UdpSender.send(d.toJson());
+                    lastAaData = System.currentTimeMillis();
+                    status = "차량 화면 안내 읽는 중: " + d.dist + " " + d.text;
+                    captureDisplay(displayId, cardB);
+                    return true;
+                }
+            }
+            long now = System.currentTimeMillis();
+            if (now - lastLog > 15000 && diag.length() > 0) {
+                lastLog = now;
+                NavListenerService.log("차량화면 진단: " + (diag.length() > 600 ? diag.substring(0, 600) : diag));
+            }
+        } catch (Throwable t) {
+            status = "차량 화면 읽기 오류: " + t.getMessage();
+        }
+        return false;
+    }
+
+    private AccessibilityNodeInfo findDist(AccessibilityNodeInfo n, StringBuilder diag, int depth) {
+        if (n == null || depth > 40) return null;
+        CharSequence t = n.getText();
+        if (t != null) {
+            if (diag.length() < 600) diag.append(t).append(" / ");
+            if (DIST_ONLY.matcher(t).matches()) return n;
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo r = findDist(n.getChild(i), diag, depth + 1);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    private void collect(AccessibilityNodeInfo n, StringBuilder out, int depth) {
+        if (n == null || depth > 40) return;
+        if (n.getText() != null) out.append(n.getText()).append(" | ");
+        if (n.getContentDescription() != null) out.append(n.getContentDescription()).append(" | ");
+        for (int i = 0; i < n.getChildCount(); i++) collect(n.getChild(i), out, depth + 1);
+    }
+
+    private volatile long lastAaShot = 0;
+    private volatile boolean aaShotFailed = false;
+
+    /** 차량 화면의 안내 카드 부분 캡처 (기기에 따라 막혀 있으면 글자만 표시) */
+    private void captureDisplay(int displayId, Rect r) {
+        long now = System.currentTimeMillis();
+        if (aaShotFailed || busy || now - lastAaShot < 700) return;
+        lastAaShot = now;
+        busy = true;
+        try {
+            takeScreenshot(displayId, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override
+                public void onSuccess(ScreenshotResult res) {
+                    work.execute(() -> {
+                        try {
+                            HardwareBuffer hb = res.getHardwareBuffer();
+                            Bitmap hw = Bitmap.wrapHardwareBuffer(hb, res.getColorSpace());
+                            if (hw != null) {
+                                Bitmap full = hw.copy(Bitmap.Config.ARGB_8888, false);
+                                Bitmap crop = process(full, r);
+                                full.recycle();
+                                if (crop != null) UdpSender.sendBytes(jpeg(crop));
+                            }
+                            hb.close();
+                        } catch (Throwable ignored) {
+                        } finally {
+                            busy = false;
+                        }
+                    });
+                }
+
+                @Override
+                public void onFailure(int code) {
+                    busy = false;
+                    aaShotFailed = true;
+                    NavListenerService.log("차량 화면 캡처 불가(" + code + ") → 글자로 표시");
+                }
+            });
+        } catch (Throwable t) {
+            busy = false;
+            aaShotFailed = true;
         }
     }
 

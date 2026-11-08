@@ -38,7 +38,8 @@ public class NavListenerService extends NotificationListenerService {
         @Override
         public void run() {
             NavData d = last;
-            if (d != null) UdpSender.send(d.toJson());
+            boolean aaFresh = System.currentTimeMillis() - TmapA11yService.lastAaData < 3000;
+            if (d != null && !aaFresh) UdpSender.send(d.toJson());
             handler.postDelayed(this, 1000);
         }
     };
@@ -98,7 +99,7 @@ public class NavListenerService extends NotificationListenerService {
 
         last = d;
         lastKey = sbn.getKey();
-        UdpSender.send(d.toJson());
+        if (System.currentTimeMillis() - TmapA11yService.lastAaData > 3000) UdpSender.send(d.toJson());
     }
 
     static boolean isWatched(String pkg, SharedPreferences p) {
