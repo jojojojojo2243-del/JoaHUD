@@ -132,6 +132,7 @@ public class TmapA11yService extends AccessibilityService {
         try {
             android.util.SparseArray<List<AccessibilityWindowInfo>> all = getWindowsOnAllDisplays();
             StringBuilder diag = new StringBuilder();
+            int aaDisplay = -1;
             for (int i = 0; i < all.size(); i++) {
                 int displayId = all.keyAt(i);
                 if (displayId == Display.DEFAULT_DISPLAY) continue;
@@ -141,6 +142,7 @@ public class TmapA11yService extends AccessibilityService {
                     Rect wb = new Rect();
                     w.getBoundsInScreen(wb);
                     diag.append("[화면").append(displayId).append(' ').append(root.getPackageName()).append("] ");
+                    if (root.getPackageName() != null && root.getPackageName().toString().contains("gearhead")) aaDisplay = displayId;
                     AccessibilityNodeInfo distNode = findDist(root, diag, 0);
                     if (distNode == null) continue;
                     // 거리 글자를 감싸는 안내 카드 범위 찾기
@@ -171,6 +173,12 @@ public class TmapA11yService extends AccessibilityService {
                     captureDisplay(displayId, cardB);
                     return true;
                 }
+            }
+            // 글자가 없으면(그림으로 그려짐) → 차량 화면을 캡처해서 초록 안내 카드를 자동으로 찾아 자름
+            if (aaDisplay >= 0 && !aaShotFailed) {
+                captureDisplay(aaDisplay, null);
+                status = "차량 화면 캡처로 안내 카드 찾는 중";
+                return true;
             }
             long now = System.currentTimeMillis();
             if (now - lastLog > 15000 && diag.length() > 0) {
@@ -204,6 +212,40 @@ public class TmapA11yService extends AccessibilityService {
         for (int i = 0; i < n.getChildCount(); i++) collect(n.getChild(i), out, depth + 1);
     }
 
+    private volatile boolean shotLogged = false;
+
+    /**
+     * 티맵 안드로이드 오토 화면의 회전 안내 카드(짙은 초록 상자)를 찾는다.
+     * 화면 위쪽 절반에서 초록색 픽셀이 모인 영역의 테두리를 구함.
+     */
+    private Rect findGuideCard(Bitmap b) {
+        int w = b.getWidth(), h = b.getHeight();
+        int step = Math.max(2, w / 320);
+        int limitY = h * 3 / 5;
+        int minX = w, minY = h, maxX = -1, maxY = -1, count = 0;
+        for (int y = 0; y < limitY; y += step) {
+            for (int x = 0; x < w; x += step) {
+                int v = b.getPixel(x, y);
+                int r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, bl = v & 0xff;
+                if (g > 60 && g > r + 25 && g > bl + 5) {
+                    count++;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        int bw = maxX - minX, bh = maxY - minY;
+        if (count < 40 || bw < w / 10 || bh < h / 12) return null;
+        Rect r = new Rect();
+        r.left = minX;
+        r.top = minY;
+        r.right = Math.min(w, maxX + step);
+        r.bottom = Math.min(h, maxY + step);
+        return r;
+    }
+
     private volatile long lastAaShot = 0;
     private volatile boolean aaShotFailed = false;
 
@@ -223,9 +265,23 @@ public class TmapA11yService extends AccessibilityService {
                             Bitmap hw = Bitmap.wrapHardwareBuffer(hb, res.getColorSpace());
                             if (hw != null) {
                                 Bitmap full = hw.copy(Bitmap.Config.ARGB_8888, false);
-                                Bitmap crop = process(full, r);
+                                Rect area = r != null ? r : findGuideCard(full);
+                                if (area != null) {
+                                    Bitmap crop = process(full, area);
+                                    if (crop != null) {
+                                        UdpSender.sendBytes(jpeg(crop));
+                                        lastAaData = System.currentTimeMillis();
+                                        status = "차량 화면 안내 카드 표시 중";
+                                    }
+                                } else {
+                                    status = "차량 화면에서 초록 안내 카드 없음 (길안내 중인지 확인)";
+                                }
+                                if (!shotLogged) {
+                                    shotLogged = true;
+                                    NavListenerService.log("차량 화면 캡처 성공 " + full.getWidth() + "x" + full.getHeight()
+                                            + (area != null ? " 카드 " + area.left + "," + area.top + "~" + area.right + "," + area.bottom : " 카드 못 찾음"));
+                                }
                                 full.recycle();
-                                if (crop != null) UdpSender.sendBytes(jpeg(crop));
                             }
                             hb.close();
                         } catch (Throwable ignored) {
@@ -239,7 +295,7 @@ public class TmapA11yService extends AccessibilityService {
                 public void onFailure(int code) {
                     busy = false;
                     aaShotFailed = true;
-                    NavListenerService.log("차량 화면 캡처 불가(" + code + ") → 글자로 표시");
+                    NavListenerService.log("차량 화면 캡처 불가(코드 " + code + ")");
                 }
             });
         } catch (Throwable t) {

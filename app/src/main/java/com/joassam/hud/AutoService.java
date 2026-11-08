@@ -56,6 +56,7 @@ public class AutoService extends Service {
     private boolean wasConnected = false;
     private long lastNetTry = 0;
     private Object panProxy;
+    private boolean panLogged = false;
 
     private final BroadcastReceiver carReceiver = new BroadcastReceiver() {
         @Override
@@ -253,7 +254,10 @@ public class AutoService extends Service {
                 NavListenerService.log("테더링 연결 시도: " + d.getName() + " → " + r);
                 if (Boolean.TRUE.equals(r)) any = true;
             } catch (Throwable t) {
-                NavListenerService.log("테더링 자동연결 불가(기종 제한): " + t.getClass().getSimpleName());
+                if (!panLogged) {
+                    panLogged = true;
+                    NavListenerService.log("테더링 자동연결 불가(기종 제한) → 메인폰 핫스팟(와이파이) 사용 권장");
+                }
             }
         }
         return any;
