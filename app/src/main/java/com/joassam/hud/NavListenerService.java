@@ -106,7 +106,8 @@ public class NavListenerService extends NotificationListenerService {
 
         // "실행 중" 같은 상태 알림이 진짜 안내를 덮어쓰지 않도록
         boolean useful = !d.dir.equals("NONE") || !d.dist.isEmpty();
-        if (!useful && last != null && last.active) return;
+        // "TMAP이 Android Auto에 연결되었습니다" 같은 안내 아닌 알림은 HUD에 띄우지 않음
+        if (!useful) return;
 
         // 목적지로 티맵 경로를 받아 회전 방향 계산
         if (d.sub != null && !d.sub.isEmpty()) RouteGuide.setDestination(this, d.sub);
