@@ -109,35 +109,40 @@ public class HudActivity extends Activity {
         applyMirror();
 
         controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setBackgroundColor(Color.argb(200, 40, 40, 40));
-        controls.setGravity(Gravity.CENTER);
-        controls.addView(ctrl("좌우반전", v -> {
+        controls.setOrientation(LinearLayout.VERTICAL);
+        controls.setBackgroundColor(Color.argb(210, 40, 40, 40));
+        LinearLayout row1 = new LinearLayout(this);
+        LinearLayout row2 = new LinearLayout(this);
+        row1.setGravity(Gravity.CENTER);
+        row2.setGravity(Gravity.CENTER);
+        controls.addView(row1);
+        controls.addView(row2);
+        row1.addView(ctrl("좌우반전", v -> {
             prefs.edit().putBoolean("mirror_h", !prefs.getBoolean("mirror_h", true)).apply();
             applyMirror();
         }));
-        controls.addView(ctrl("상하반전", v -> {
+        row1.addView(ctrl("상하반전", v -> {
             prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false)).apply();
             applyMirror();
         }));
-        controls.addView(ctrl("색상", v -> {
+        row1.addView(ctrl("색상", v -> {
             int c = (prefs.getInt("color", 0) + 1) % COLORS.length;
             prefs.edit().putInt("color", c).apply();
             hud.setColor(COLORS[c]);
         }));
-        controls.addView(ctrl("속도크기", v -> {
+        row1.addView(ctrl("속도크기", v -> {
             int i = (prefs.getInt("speed_size", 1) + 1) % SPEED_SCALES.length;
             prefs.edit().putInt("speed_size", i).apply();
             hud.setSpeedScale(SPEED_SCALES[i]);
             android.widget.Toast.makeText(this, "속도 크기: " + SPEED_NAMES[i], android.widget.Toast.LENGTH_SHORT).show();
         }));
-        controls.addView(ctrl("화면방향", v -> {
-            int o = (prefs.getInt("orient", 0) + 1) % ORIENT_NAMES.length;
-            prefs.edit().putInt("orient", o).apply();
-            applyOrientation();
-            android.widget.Toast.makeText(this, "화면 방향: " + ORIENT_NAMES[o], android.widget.Toast.LENGTH_SHORT).show();
-        }));
-        controls.addView(ctrl("닫기", v -> finish()));
+        btnAuto = ctrl("🔄 자동회전", v -> setOrient(0));
+        btnLand = ctrl("▭ 가로", v -> setOrient(1));
+        btnPort = ctrl("▯ 세로", v -> setOrient(2));
+        row2.addView(btnAuto);
+        row2.addView(btnLand);
+        row2.addView(btnPort);
+        row2.addView(ctrl("닫기", v -> finish()));
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         root.addView(controls, clp);
         controls.setVisibility(View.GONE);
@@ -155,18 +160,29 @@ public class HudActivity extends Activity {
         handler.post(tick);
     }
 
-    // 대시보드에 눕혀 두면 자동 회전이 불안정해서 방향을 고정
-    private static final String[] ORIENT_NAMES = {"가로 고정", "가로(반대) 고정", "세로 고정", "자동 회전"};
+    // 기본은 자동 회전(폰을 돌리면 화면도 돌아감), 필요할 때만 가로/세로 고정
+    private static final String[] ORIENT_NAMES = {"자동 회전", "가로 고정", "세로 고정"};
     private static final int[] ORIENT_VALUES = {
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT,
     };
+    private Button btnAuto, btnLand, btnPort;
+
+    private void setOrient(int o) {
+        prefs.edit().putInt("orient_mode", o).apply();
+        applyOrientation();
+        android.widget.Toast.makeText(this, "화면 방향: " + ORIENT_NAMES[o], android.widget.Toast.LENGTH_SHORT).show();
+    }
 
     private void applyOrientation() {
-        int o = prefs.getInt("orient", 0) % ORIENT_VALUES.length;
+        int o = prefs.getInt("orient_mode", 0) % ORIENT_VALUES.length;
         setRequestedOrientation(ORIENT_VALUES[o]);
+        Button[] bs = {btnAuto, btnLand, btnPort};
+        for (int i = 0; i < bs.length; i++) {
+            if (bs[i] == null) continue;
+            bs[i].setTextColor(i == o ? Color.rgb(0, 230, 110) : Color.WHITE);
+        }
     }
 
     private void applyMirror() {
@@ -178,6 +194,9 @@ public class HudActivity extends Activity {
         Button btn = new Button(this);
         btn.setText(s);
         btn.setAllCaps(false);
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(15);
+        btn.setBackgroundColor(Color.argb(0, 0, 0, 0));
         btn.setOnClickListener(v -> {
             l.onClick(v);
             handler.removeCallbacks(hideControls);
