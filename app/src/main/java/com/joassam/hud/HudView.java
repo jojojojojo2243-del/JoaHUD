@@ -166,7 +166,7 @@ public class HudView extends View {
         if (s == null || s.isEmpty()) return;
         float ts = size;
         text.setTextSize(ts);
-        while (text.measureText(s) > maxW && ts > size * 0.5f) {
+        while (text.measureText(s) > maxW && ts > size * 0.2f) {
             ts *= 0.92f;
             text.setTextSize(ts);
         }
