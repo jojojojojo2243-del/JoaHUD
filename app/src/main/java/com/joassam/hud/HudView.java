@@ -170,6 +170,12 @@ public class HudView extends View {
         text.setTextAlign(Paint.Align.RIGHT);
         text.setTextSize(h * 0.10f);
         c.drawText(clock.format(new Date()), w - pad, pad + h * 0.08f, text);
+        if (guiding && !remainText().isEmpty()) {
+            text.setTextAlign(Paint.Align.LEFT);
+            text.setColor(Color.LTGRAY);
+            text.setTextSize(h * 0.09f);
+            c.drawText(remainText(), pad, pad + h * 0.08f, text);
+        }
 
         float splitX = w * 0.46f;          // 왼쪽 안내 영역 끝
         float speedCx = w * 0.70f;         // 속도 가운데
@@ -208,8 +214,20 @@ public class HudView extends View {
             line.setColor(Color.argb(120, 255, 255, 255));
             float ly = card.top + card.height() * 0.64f;
             c.drawLine(card.left + pad * 0.3f, ly, card.right - pad * 0.3f, ly, line);
-            fitText(c, nav.text, card.left + pad * 0.5f, card.top + card.height() * 0.88f,
-                    card.width() - pad, card.height() * 0.2f);
+            if (nav.nextDir != null && !nav.nextDir.isEmpty() && !nav.nextDir.equals("NONE") && nav.nextDist > 0) {
+                // 다음다음 회전: 작은 화살표 + 거리 (순정 HUD 아래칸)
+                String keepDir = nav.dir;
+                nav.dir = nav.nextDir;
+                float na = card.height() * 0.24f;
+                drawTurn(c, card.left + pad * 0.5f + na * 0.5f, card.top + card.height() * 0.80f, na);
+                nav.dir = keepDir;
+                String nd = nav.nextDist >= 1000 ? String.format(Locale.KOREA, "%.1fkm", nav.nextDist / 1000f) : nav.nextDist + "m";
+                fitText(c, nd, card.left + pad * 0.5f + na * 1.2f, card.top + card.height() * 0.88f,
+                        card.width() - na * 1.4f - pad, card.height() * 0.2f);
+            } else {
+                fitText(c, nav.text, card.left + pad * 0.5f, card.top + card.height() * 0.88f,
+                        card.width() - pad, card.height() * 0.2f);
+            }
             color = saved;
             stroke.setColor(color);
             fill.setColor(color);
@@ -229,8 +247,10 @@ public class HudView extends View {
         c.drawText(v, speedCx, speedBase + speedSize * 0.35f, text);
 
         // 단속·위험 안내 문구가 있으면 오른쪽에 주황 삼각형 경고
+        if (guiding && nav.limit > 0) drawLimit(c, w * 0.90f, h * 0.36f, h * 0.12f);
+        if (guiding && nav.sdiDist > 0) drawCamera(c, w * 0.90f, h * 0.70f, h * 0.20f);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
-        if (guiding && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
+        if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
             float tx = w * 0.90f, ty = h * 0.55f, ts = h * 0.30f;
             Path tri = new Path();
             tri.moveTo(tx, ty - ts * 0.55f);
@@ -272,6 +292,11 @@ public class HudView extends View {
         text.setColor(Color.GRAY);
         text.setTextSize(w * 0.06f);
         c.drawText(clock.format(new Date()), w - pad, h * 0.07f, text);
+        if (guiding && !remainText().isEmpty()) {
+            text.setTextAlign(Paint.Align.LEFT);
+            text.setColor(Color.LTGRAY);
+            c.drawText(remainText(), pad, h * 0.07f, text);
+        }
 
         // ── 위: 회전 안내 ──
         if (hasFrame) {
@@ -350,8 +375,10 @@ public class HudView extends View {
         }
 
         // 오른쪽: 단속·위험 경고 삼각형
+        if (guiding && nav.limit > 0) drawLimit(c, w - pad - w * 0.08f, sy - sp * 0.35f, w * 0.08f);
+        if (guiding && nav.sdiDist > 0) drawCamera(c, pad + w * 0.10f, sy - sp * 0.35f, w * 0.13f);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
-        if (guiding && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
+        if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
             float tx = w - pad - w * 0.06f, ty = sy - sp * 0.3f, ts = w * 0.13f;
             Path tri = new Path();
             tri.moveTo(tx, ty - ts * 0.55f);
@@ -373,6 +400,53 @@ public class HudView extends View {
             text.setTextAlign(Paint.Align.CENTER);
             fitText(c, "◉ " + nav.sub, cx, h * 0.90f, w - 2 * pad, w * 0.05f);
         }
+    }
+
+    /** 남은 시간·거리 "00시간18분  13km" */
+    private String remainText() {
+        if (nav == null || nav.remainDist <= 0) return "";
+        int t = nav.remainTime / 60;
+        String time = String.format(Locale.KOREA, "%02d시간%02d분", t / 60, t % 60);
+        String dist = nav.remainDist >= 1000
+                ? String.format(Locale.KOREA, "%.1fkm", nav.remainDist / 1000f) : nav.remainDist + "m";
+        return time + "   " + dist;
+    }
+
+    /** 제한속도 표지판 (빨간 테두리 원) */
+    private void drawLimit(Canvas c, float cx, float cy, float r) {
+        if (nav == null || nav.limit <= 0) return;
+        Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+        ring.setColor(Color.WHITE);
+        c.drawCircle(cx, cy, r, ring);
+        ring.setStyle(Paint.Style.STROKE);
+        ring.setStrokeWidth(r * 0.22f);
+        ring.setColor(Color.rgb(220, 30, 30));
+        c.drawCircle(cx, cy, r * 0.89f, ring);
+        // 제한속도 넘으면 숫자도 빨갛게
+        text.setColor(speed > nav.limit + 2 ? Color.rgb(220, 30, 30) : Color.BLACK);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(r * (nav.limit >= 100 ? 0.85f : 1.0f));
+        c.drawText(String.valueOf(nav.limit), cx, cy + r * 0.35f, text);
+    }
+
+    /** 단속 카메라 경고 (주황 삼각형 + 남은 거리) */
+    private void drawCamera(Canvas c, float cx, float cy, float s) {
+        if (nav == null || nav.sdiDist <= 0) return;
+        Path tri = new Path();
+        tri.moveTo(cx, cy - s * 0.55f);
+        tri.lineTo(cx + s * 0.55f, cy + s * 0.45f);
+        tri.lineTo(cx - s * 0.55f, cy + s * 0.45f);
+        tri.close();
+        Paint warn = new Paint(Paint.ANTI_ALIAS_FLAG);
+        warn.setColor(Color.rgb(255, 140, 0));
+        c.drawPath(tri, warn);
+        text.setColor(Color.BLACK);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(s * 0.45f);
+        c.drawText("!", cx, cy + s * 0.32f, text);
+        text.setColor(Color.rgb(255, 170, 60));
+        text.setTextSize(s * 0.32f);
+        c.drawText(nav.sdiDist + "m", cx, cy + s * 0.9f, text);
     }
 
     private void drawSpeed(Canvas c, float cx, float baseline, float size, boolean big) {

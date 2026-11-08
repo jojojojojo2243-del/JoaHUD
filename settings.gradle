@@ -3,7 +3,12 @@ pluginManagement {
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral() }
+    repositories {
+        google()
+        mavenCentral()
+        // TMAP EDC SDK (티맵 공식 연동)
+        maven { url 'https://devrepo.tmapadmin.com/repository/tmap-sdk-release/' }
+    }
 }
 rootProject.name = "JoaHUD"
 include ':app'

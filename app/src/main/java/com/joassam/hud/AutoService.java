@@ -153,6 +153,11 @@ public class AutoService extends Service {
         updateNoti("🚗 안드로이드 오토 연결됨 — HUD 실행");
         NavListenerService.log("안드로이드 오토 연결됨");
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        try {
+            TmapEdc.start(this);
+        } catch (Throwable t) {
+            NavListenerService.log("EDC 시작 오류: " + t);
+        }
         if (p.getBoolean("auto_hud", true)) {
             handler.postDelayed(this::launchHud, 1500);
         }

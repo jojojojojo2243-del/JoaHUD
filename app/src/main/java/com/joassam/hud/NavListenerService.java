@@ -27,6 +27,8 @@ public class NavListenerService extends NotificationListenerService {
     ));
 
     static final LinkedList<String> LOG = new LinkedList<>();
+    static final String KAKAO = "com.locnall.KimGiSa";
+    private static long lastKakao = 0;
     static volatile boolean connected = false;
 
     private static NavData last;
@@ -38,7 +40,9 @@ public class NavListenerService extends NotificationListenerService {
         @Override
         public void run() {
             NavData d = last;
-            boolean aaFresh = System.currentTimeMillis() - TmapA11yService.lastAaData < 3000;
+            if (d != null) merge(d);
+            boolean aaFresh = System.currentTimeMillis() - TmapA11yService.lastAaData < 3000
+                    || TmapEdc.fresh();
             if (d != null && !aaFresh) UdpSender.send(d.toJson());
             handler.postDelayed(this, 1000);
         }
@@ -76,6 +80,7 @@ public class NavListenerService extends NotificationListenerService {
         if (lastKey != null && lastKey.equals(sbn.getKey()) && last != null) {
             last.active = false;
             last.time = System.currentTimeMillis();
+            RouteGuide.clear();
             UdpSender.send(last.toJson());
             log("길안내 알림 종료: " + sbn.getPackageName());
         }
@@ -93,13 +98,34 @@ public class NavListenerService extends NotificationListenerService {
         log((watched ? "★ " : "") + pkg + "\n   → [" + d.dir + " " + d.dist + (d.icon.isEmpty() ? " 그림없음" : " 그림있음") + "] " + d.raw);
         if (!watched || d.raw.isEmpty()) return;
 
+        // 카카오내비 우선: 최근 10초 안에 카카오내비 안내가 있었으면 티맵 알림은 무시
+        boolean isKakao = pkg.equals(KAKAO);
+        long now = System.currentTimeMillis();
+        if (isKakao && (!d.dir.equals("NONE") || !d.dist.isEmpty())) lastKakao = now;
+        if (!isKakao && p.getString("nav_pref", "tmap").equals("kakao") && now - lastKakao < 10000) return;
+
         // "실행 중" 같은 상태 알림이 진짜 안내를 덮어쓰지 않도록
         boolean useful = !d.dir.equals("NONE") || !d.dist.isEmpty();
         if (!useful && last != null && last.active) return;
 
+        // 목적지로 티맵 경로를 받아 회전 방향 계산
+        if (d.sub != null && !d.sub.isEmpty()) RouteGuide.setDestination(this, d.sub);
+        merge(d);
+
         last = d;
         lastKey = sbn.getKey();
-        if (System.currentTimeMillis() - TmapA11yService.lastAaData > 3000) UdpSender.send(d.toJson());
+        if (System.currentTimeMillis() - TmapA11yService.lastAaData > 3000 && !TmapEdc.fresh()) UdpSender.send(d.toJson());
+    }
+
+    /** 알림에 없는 회전 방향을 티맵 경로 계산 결과로 채움 */
+    static void merge(NavData d) {
+        if (!RouteGuide.fresh()) return;
+        if (d.dir == null || d.dir.equals("NONE")) d.dir = RouteGuide.dir;
+        if ((d.dist == null || d.dist.isEmpty()) && RouteGuide.distToNext > 0) {
+            float m = RouteGuide.distToNext;
+            d.dist = m >= 1000 ? String.format(java.util.Locale.KOREA, "%.1fkm", m / 1000f) : Math.round(m / 10f) * 10 + "m";
+        }
+        if (d.text == null || d.text.isEmpty()) d.text = RouteGuide.desc;
     }
 
     static boolean isWatched(String pkg, SharedPreferences p) {

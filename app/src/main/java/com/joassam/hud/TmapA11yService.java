@@ -175,7 +175,12 @@ public class TmapA11yService extends AccessibilityService {
                 }
             }
             // 글자가 없으면(그림으로 그려짐) → 차량 화면을 캡처해서 초록 안내 카드를 자동으로 찾아 자름
-            if (aaDisplay >= 0 && !aaShotFailed) {
+            if (aaDisplay >= 0 && (!aaShotFailed || System.currentTimeMillis() - failedAt > 60000)) {
+                aaShotFailed = false;
+                if (System.currentTimeMillis() - lastLog > 60000) {
+                    lastLog = System.currentTimeMillis();
+                    NavListenerService.log("차량 화면 찾음(화면 " + aaDisplay + ") → 캡처 시도");
+                }
                 captureDisplay(aaDisplay, null);
                 status = "차량 화면 캡처로 안내 카드 찾는 중";
                 return true;
@@ -194,6 +199,7 @@ public class TmapA11yService extends AccessibilityService {
     private AccessibilityNodeInfo findDist(AccessibilityNodeInfo n, StringBuilder diag, int depth) {
         if (n == null || depth > 40) return null;
         CharSequence t = n.getText();
+        if (t == null) t = n.getContentDescription();
         if (t != null) {
             if (diag.length() < 600) diag.append(t).append(" / ");
             if (DIST_ONLY.matcher(t).matches()) return n;
@@ -213,6 +219,7 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     private volatile boolean shotLogged = false;
+    private volatile long lastShotLog = 0;
 
     /**
      * 티맵 안드로이드 오토 화면의 회전 안내 카드(짙은 초록 상자)를 찾는다.
@@ -248,11 +255,14 @@ public class TmapA11yService extends AccessibilityService {
 
     private volatile long lastAaShot = 0;
     private volatile boolean aaShotFailed = false;
+    private volatile long failedAt = 0;
+    private volatile int failCount = 0;
 
     /** 차량 화면의 안내 카드 부분 캡처 (기기에 따라 막혀 있으면 글자만 표시) */
     private void captureDisplay(int displayId, Rect r) {
         long now = System.currentTimeMillis();
-        if (aaShotFailed || busy || now - lastAaShot < 700) return;
+        // 안드로이드는 캡처 간격이 너무 짧으면 거부하므로 1.1초 간격
+        if (aaShotFailed || busy || now - lastAaShot < 1100) return;
         lastAaShot = now;
         busy = true;
         try {
@@ -276,8 +286,9 @@ public class TmapA11yService extends AccessibilityService {
                                 } else {
                                     status = "차량 화면에서 초록 안내 카드 없음 (길안내 중인지 확인)";
                                 }
-                                if (!shotLogged) {
+                                if (!shotLogged || System.currentTimeMillis() - lastShotLog > 60000) {
                                     shotLogged = true;
+                                    lastShotLog = System.currentTimeMillis();
                                     NavListenerService.log("차량 화면 캡처 성공 " + full.getWidth() + "x" + full.getHeight()
                                             + (area != null ? " 카드 " + area.left + "," + area.top + "~" + area.right + "," + area.bottom : " 카드 못 찾음"));
                                 }
@@ -294,13 +305,22 @@ public class TmapA11yService extends AccessibilityService {
                 @Override
                 public void onFailure(int code) {
                     busy = false;
-                    aaShotFailed = true;
-                    NavListenerService.log("차량 화면 캡처 불가(코드 " + code + ")");
+                    if (code == 3) return; // 간격이 짧아서 거부 → 다음에 다시
+                    failCount++;
+                    NavListenerService.log("차량 화면 캡처 불가(코드 " + code + ", 화면 " + displayId + ")");
+                    if (failCount >= 5) {
+                        aaShotFailed = true;
+                        failedAt = System.currentTimeMillis();
+                        failCount = 0;
+                        status = "차량 화면 캡처가 막혀 있음(코드 " + code + ") — 1분 뒤 재시도";
+                    }
                 }
             });
         } catch (Throwable t) {
             busy = false;
+            NavListenerService.log("차량 화면 캡처 오류: " + t.getClass().getSimpleName() + " " + t.getMessage());
             aaShotFailed = true;
+            failedAt = System.currentTimeMillis();
         }
     }
 

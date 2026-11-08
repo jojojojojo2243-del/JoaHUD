@@ -68,6 +68,7 @@ public class HudActivity extends Activity {
         @Override
         public void onLocationChanged(Location loc) {
             hud.setSpeed(loc.hasSpeed() ? loc.getSpeed() * 3.6f : 0f);
+            RouteGuide.onLocation(loc);
         }
 
         @Override

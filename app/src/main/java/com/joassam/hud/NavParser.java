@@ -45,6 +45,16 @@ public class NavParser {
             {"slight right", "KEEP_RIGHT"}, {"keep right", "KEEP_RIGHT"}, {"오른쪽 방향", "KEEP_RIGHT"},
             {"우측", "KEEP_RIGHT"}, {"오른쪽", "KEEP_RIGHT"},
             {"직진", "STRAIGHT"}, {"continue", "STRAIGHT"}, {"straight", "STRAIGHT"},
+            // 카카오내비식 표현
+            {"좌측 방향", "KEEP_LEFT"}, {"우측 방향", "KEEP_RIGHT"},
+            {"좌측 진입", "KEEP_LEFT"}, {"우측 진입", "KEEP_RIGHT"},
+            {"좌측 출구", "KEEP_LEFT"}, {"우측 출구", "KEEP_RIGHT"},
+            {"10시 방향", "KEEP_LEFT"}, {"11시 방향", "KEEP_LEFT"},
+            {"1시 방향", "KEEP_RIGHT"}, {"2시 방향", "KEEP_RIGHT"},
+            {"9시 방향", "LEFT"}, {"3시 방향", "RIGHT"},
+            {"8시 방향", "LEFT"}, {"4시 방향", "RIGHT"},
+            {"7시 방향", "UTURN"}, {"12시 방향", "STRAIGHT"},
+            {"p턴", "UTURN"},
     };
 
     public static NavData parse(Context ctx, StatusBarNotification sbn) {

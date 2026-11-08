@@ -224,6 +224,12 @@ public class MainActivity extends Activity {
                         }
                     });
         }
+        if (RouteGuide.key(this).isEmpty()) {
+            todo++;
+            addTodo("티맵 화살표 켜기 (TMAP API 키 입력)",
+                    "티맵 공식 연동으로 회전·제한속도·카메라를 받습니다. 눌러서 키 입력",
+                    this::askKey);
+        }
         if (!installOk()) {
             todo++;
             addTodo("자동 업데이트 설치 허용", "'이 출처 허용' 켜기",
@@ -245,6 +251,8 @@ public class MainActivity extends Activity {
         StringBuilder d = new StringBuilder();
         d.append(car ? "차량 연결됨" : "시동 걸면 자동으로 HUD가 켜져요");
         d.append("\n").append(net ? "인터넷 연결됨" : "인터넷 없음 — 메인폰 핫스팟에 연결하세요");
+        if (!RouteGuide.key(this).isEmpty()) d.append("\n티맵 공식 연동: ").append(TmapEdc.getState());
+        if (!TmapEdc.ok() && !RouteGuide.status.isEmpty()) d.append("\n화살표(보조): ").append(RouteGuide.status);
         if (car && TmapA11yService.connected && !TmapA11yService.status.isEmpty()) {
             d.append("\n").append(TmapA11yService.status);
         }
@@ -255,6 +263,24 @@ public class MainActivity extends Activity {
         if (logView != null && advanced.getVisibility() == View.VISIBLE) {
             logView.setText(NavListenerService.logText());
         }
+    }
+
+    private void askKey() {
+        EditText in = new EditText(this);
+        in.setHint("TMAP appKey 붙여넣기");
+        in.setText(RouteGuide.key(this));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("티맵 API 키")
+                .setMessage("openapi.sk.com 가입 → 앱 만들기(appKey 발급) → TMAP API 상품 구매에서 Premium 요금제 선택 → appKey를 붙여넣으세요")
+                .setView(in)
+                .setPositiveButton("저장", (dlg, w) -> {
+                    p.edit().putString("tmap_key", in.getText().toString().trim()).apply();
+                    refresh();
+                })
+                .setNeutralButton("가입 페이지 열기", (dlg, w) ->
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://openapi.sk.com"))))
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     private void addTodo(String title, String hint, Runnable action) {
@@ -300,6 +326,17 @@ public class MainActivity extends Activity {
         familyBox = new LinearLayout(this);
         familyBox.setOrientation(LinearLayout.VERTICAL);
         advanced.addView(familyBox);
+
+        Button keyBtn = button("티맵 API 키 입력/변경");
+        keyBtn.setOnClickListener(v -> askKey());
+        advanced.addView(keyBtn);
+
+        Button edc = button("티맵 공식 연동 지금 시작 (인증 1회 = 요금 1건)");
+        edc.setOnClickListener(v -> {
+            TmapEdc.start(this);
+            Toast.makeText(this, "티맵 연동 시작 — 티맵에서 길안내를 켜세요", Toast.LENGTH_SHORT).show();
+        });
+        advanced.addView(edc);
 
         Button test = button("테스트 신호 보내기");
         test.setOnClickListener(v -> {

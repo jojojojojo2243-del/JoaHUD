@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 // GitHub Actions 실행 번호를 버전으로 사용 → 올릴 때마다 자동 증가
@@ -7,11 +8,11 @@ def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
 
 android {
     namespace 'com.joassam.hud'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.joassam.hud"
-        minSdk 24
+        minSdk 29
         targetSdk 34
         versionCode runNumber
         versionName "1." + runNumber
@@ -41,4 +42,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation 'com.tmapmobility.tmap:tmap-edc-sdk:1.0.0.0051'
 }
