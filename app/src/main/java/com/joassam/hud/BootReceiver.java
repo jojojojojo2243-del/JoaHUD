@@ -8,6 +8,7 @@ import android.content.Intent;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent i) {
+        A11yGuard.ensure(c);
         if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(i.getAction())) {
             NavListenerService.log("업데이트 설치 완료 → v" + Updater.currentVersion(c));
         }

@@ -113,6 +113,7 @@ public class AutoService extends Service {
     private long lastUpdateCheck = 0;
 
     private void check() {
+        A11yGuard.ensure(this);   // 안내판 읽기가 꺼지면 바로 다시 켬
         int st = queryCarState();
         // 주차 중(차량 미연결)이고 인터넷이 될 때 15분마다 업데이트 확인·설치
         // (운전 중에는 HUD가 꺼지지 않도록 설치하지 않음)

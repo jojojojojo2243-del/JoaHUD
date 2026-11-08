@@ -188,10 +188,17 @@ public class MainActivity extends Activity {
             addTodo("티맵 길안내 읽기 허용", "목록에서 '조아 HUD' 켜기",
                     () -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
         }
+        A11yGuard.ensure(this);
         if (!a11yOk()) {
             todo++;
             addTodo("차량 화면 안내판 읽기 허용", "설치된 앱 → '조아 HUD 티맵 안내판 읽기' 켜기\n막히면: 앱 정보 → ⋮ → 제한된 설정 허용",
                     () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        }
+        if (!A11yGuard.canAutoEnable(this)) {
+            todo++;
+            addTodo("안내판 읽기 '항상 켜짐' 만들기 (PC로 1회)",
+                    "업데이트 때마다 꺼지는 것 방지. PC에 USB로 연결 후 명령 1줄 — 사용법은 README 참고",
+                    () -> Toast.makeText(this, "PC 명령: adb shell pm grant com.joassam.hud android.permission.WRITE_SECURE_SETTINGS", Toast.LENGTH_LONG).show());
         }
         if (!overlayOk()) {
             todo++;
