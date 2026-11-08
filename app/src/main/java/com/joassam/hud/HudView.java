@@ -98,14 +98,17 @@ public class HudView extends View {
 
         // 티맵 화면 전송 모드: 받은 안내판을 그대로 크게
         if (frame != null && now - lastFrame < 2500) {
-            float speedH = landscape ? h * 0.18f : h * 0.12f;
-            float availH = h - speedH;
-            float sc = Math.min(w / (float) frame.getWidth(), availH / (float) frame.getHeight());
+            // 화면 가장자리(둥근 모서리·곡면)에 잘리지 않게 안쪽 영역만 사용
+            float mx = w * 0.06f, top0 = h * 0.06f;
+            float speedH = landscape ? h * 0.16f : h * 0.09f;
+            float bottom0 = h * 0.86f - speedH * 1.2f;
+            float availW = w - 2 * mx, availH = bottom0 - top0;
+            float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
             float fw = frame.getWidth() * sc, fh = frame.getHeight() * sc;
-            float left = (w - fw) / 2f, top = (availH - fh) / 2f;
+            float left = (w - fw) / 2f, top = top0 + (availH - fh) / 2f;
             bmpPaint.setColorFilter(null);
             c.drawBitmap(frame, null, new RectF(left, top, left + fw, top + fh), bmpPaint);
-            drawSpeed(c, w / 2f, h - speedH * 0.15f, speedH * 0.85f, false);
+            drawSpeed(c, w / 2f, h * 0.86f, speedH, false);
             return;
         }
 
@@ -116,7 +119,7 @@ public class HudView extends View {
             text.setTextAlign(Paint.Align.CENTER);
             text.setTextSize(Math.min(w, h) * 0.06f);
             String msg = lastRecv == 0 ? "메인폰 신호 기다리는 중…" : (stale ? "신호 끊김" : "길안내 없음");
-            c.drawText(msg + "   " + clock.format(new Date()), w / 2f, h * 0.88f, text);
+            c.drawText(msg + "   " + clock.format(new Date()), w / 2f, h * 0.82f, text);
             return;
         }
 
@@ -131,7 +134,7 @@ public class HudView extends View {
             fitText(c, nav.text, x, h * 0.63f, right - x, h * 0.1f);
             text.setColor(Color.LTGRAY);
             fitText(c, nav.sub, x, h * 0.76f, right - x, h * 0.075f);
-            drawSpeed(c, w * 0.85f, h * 0.95f, h * 0.16f, false);
+            drawSpeed(c, w * 0.82f, h * 0.86f, h * 0.15f, false);
         } else {
             float size = Math.min(w * 0.75f, h * 0.42f);
             drawTurn(c, w / 2f, h * 0.27f, size);
@@ -142,7 +145,7 @@ public class HudView extends View {
             fitText(c, nav.text, w / 2f, h * 0.72f, w * 0.94f, h * 0.05f);
             text.setColor(Color.LTGRAY);
             fitText(c, nav.sub, w / 2f, h * 0.78f, w * 0.94f, h * 0.04f);
-            drawSpeed(c, w / 2f, h * 0.95f, h * 0.1f, false);
+            drawSpeed(c, w / 2f, h * 0.87f, h * 0.08f, false);
         }
     }
 

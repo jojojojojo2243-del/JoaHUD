@@ -24,6 +24,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
+import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -181,15 +182,20 @@ public class MainActivity extends Activity {
         hud.setOnClickListener(v -> startHud());
         root.addView(hud);
 
+        // ── (예전 방식) 메인폰 화면 전송: 차량 모드에서는 쓰지 않으므로 숨김 ──
+        LinearLayout legacy = new LinearLayout(this);
+        legacy.setOrientation(LinearLayout.VERTICAL);
+        legacy.setVisibility(View.GONE);
+        root.addView(legacy);
         // ── 메인폰: 티맵 화면 전송 ──
-        root.addView(header("메인폰 ① 티맵 화면 전송 (권장)"));
-        root.addView(note("티맵 화면의 회전 안내판을 잘라 서브폰에 그대로 띄웁니다.\n"
+        legacy.addView(header("메인폰 ① 티맵 화면 전송 (권장)"));
+        legacy.addView(note("티맵 화면의 회전 안내판을 잘라 서브폰에 그대로 띄웁니다.\n"
                 + "화살표·차로·단속카메라까지 티맵과 똑같이 보입니다.\n"
                 + "• 시작 → '전체 화면' 공유 선택 (Android 14+는 '티맵' 앱만 선택해도 됨)\n"
                 + "• 티맵 길안내 화면을 켜 두세요"));
         capStatus = new TextView(this);
         capStatus.setTextSize(15);
-        root.addView(capStatus);
+        legacy.addView(capStatus);
 
         LinearLayout row = new LinearLayout(this);
         Button start = button("● 전송 시작");
@@ -199,7 +205,7 @@ public class MainActivity extends Activity {
                 .setAction(CaptureService.ACTION_STOP)));
         row.addView(start, new LinearLayout.LayoutParams(0, -2, 1f));
         row.addView(stop, new LinearLayout.LayoutParams(0, -2, 1f));
-        root.addView(row);
+        legacy.addView(row);
 
         Button tmap = button("티맵 열기");
         tmap.setOnClickListener(v -> {
@@ -207,14 +213,14 @@ public class MainActivity extends Activity {
             if (i != null) startActivity(i);
             else Toast.makeText(this, "티맵이 설치되어 있지 않습니다", Toast.LENGTH_SHORT).show();
         });
-        root.addView(tmap);
+        legacy.addView(tmap);
 
-        root.addView(header("자를 영역 설정"));
-        root.addView(note("전송 중에 티맵 길안내 화면을 띄웠다가 이 앱으로 돌아오면, 마지막 티맵 화면에 빨간 네모가 표시됩니다. "
+        legacy.addView(header("자를 영역 설정"));
+        legacy.addView(note("전송 중에 티맵 길안내 화면을 띄웠다가 이 앱으로 돌아오면, 마지막 티맵 화면에 빨간 네모가 표시됩니다. "
                 + "네모가 회전 안내판을 감싸도록 조절하세요. 세로/가로는 따로 저장됩니다."));
         editMode = new TextView(this);
         editMode.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(editMode);
+        legacy.addView(editMode);
         LinearLayout orow = new LinearLayout(this);
         Button bp = button("세로 화면용");
         bp.setOnClickListener(v -> setEditLand(false));
@@ -234,40 +240,40 @@ public class MainActivity extends Activity {
         orow.addView(bp, new LinearLayout.LayoutParams(0, -2, 1f));
         orow.addView(bl, new LinearLayout.LayoutParams(0, -2, 1f));
         orow.addView(reset, new LinearLayout.LayoutParams(0, -2, 1f));
-        root.addView(orow);
+        legacy.addView(orow);
 
         cropView = new CropPreview(this);
-        root.addView(cropView, new LinearLayout.LayoutParams(-1, dp(360)));
+        legacy.addView(cropView, new LinearLayout.LayoutParams(-1, dp(360)));
 
         String[] names = {"왼쪽", "위", "오른쪽", "아래"};
         for (int i = 0; i < 4; i++) {
             final int idx = i;
-            root.addView(note(names[i] + " (%)"));
+            legacy.addView(note(names[i] + " (%)"));
             crop[i] = new SeekBar(this);
             crop[i].setMax(100);
             crop[i].setOnSeekBarChangeListener(new SimpleSeek(v -> {
                 p.edit().putInt(key() + "ltrb".charAt(idx), v).apply();
                 cropView.invalidate();
             }));
-            root.addView(crop[i]);
+            legacy.addView(crop[i]);
         }
 
-        root.addView(note("검정 처리 강도 (어두운 배경을 완전 검정으로 → 앞유리에 뿌옇게 비치는 것 방지)"));
+        legacy.addView(note("검정 처리 강도 (어두운 배경을 완전 검정으로 → 앞유리에 뿌옇게 비치는 것 방지)"));
         SeekBar black = new SeekBar(this);
         black.setMax(160);
         black.setProgress(p.getInt("black", 70));
         black.setOnSeekBarChangeListener(new SimpleSeek(v -> p.edit().putInt("black", v).apply()));
-        root.addView(black);
+        legacy.addView(black);
 
-        root.addView(note("초당 전송 장수 (높을수록 부드럽지만 배터리·발열 증가)"));
+        legacy.addView(note("초당 전송 장수 (높을수록 부드럽지만 배터리·발열 증가)"));
         SeekBar fps = new SeekBar(this);
         fps.setMax(15);
         fps.setProgress(p.getInt("fps", 8));
         fps.setOnSeekBarChangeListener(new SimpleSeek(v -> p.edit().putInt("fps", Math.max(1, v)).apply()));
-        root.addView(fps);
+        legacy.addView(fps);
 
         // ── 메인폰: 알림 방식 ──
-        root.addView(header("메인폰 ② 알림 읽기 방식 (보조)"));
+        root.addView(header("알림 접근 상태"));
         status = new TextView(this);
         status.setTextSize(15);
         root.addView(status);
@@ -341,6 +347,10 @@ public class MainActivity extends Activity {
 
         setContentView(sv);
         setEditLand(false);
+        // 예전 화면 전송이 켜져 있으면 끄기 (HUD가 검은 화면만 나오는 원인)
+        if (CaptureService.running) {
+            startService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_STOP));
+        }
         loadFamily();
         if (p.getBoolean("auto_mode", false)) AutoService.start(this);
         if (!updChecked) {
