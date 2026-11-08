@@ -109,6 +109,10 @@ public class HudView extends View {
             drawLandscapeHud(c, w, h, guiding, stale, hasFrame);
             return;
         }
+        if (!landscape) {
+            drawPortraitHud(c, w, h, guiding, stale, hasFrame);
+            return;
+        }
 
         // 티맵 화면 전송 모드: 받은 안내판을 그대로 크게
         if (hasFrame) {
@@ -247,6 +251,127 @@ public class HudView extends View {
             text.setColor(Color.LTGRAY);
             text.setTextAlign(Paint.Align.CENTER);
             fitText(c, "◉ " + nav.sub, speedCx, h * 0.90f, w - splitX - pad, h * 0.075f);
+        }
+    }
+
+    /**
+     * 세로 HUD (순정 HUD 스타일)
+     *        ↰
+     *   859m | 교차로
+     *      ╱  ▄▄  ╲        ← 차로 그래픽
+     *     ╱  ◠◠◠   ╲
+     *   ◉   95 km/h   ⚠
+     *      목적지
+     */
+    private void drawPortraitHud(Canvas c, int w, int h, boolean guiding, boolean stale, boolean hasFrame) {
+        float cx = w / 2f;
+        float pad = w * 0.06f;
+
+        // 맨 위 시계
+        text.setTextAlign(Paint.Align.RIGHT);
+        text.setColor(Color.GRAY);
+        text.setTextSize(w * 0.06f);
+        c.drawText(clock.format(new Date()), w - pad, h * 0.07f, text);
+
+        // ── 위: 회전 안내 ──
+        if (hasFrame) {
+            float top0 = h * 0.09f, bottom0 = h * 0.36f;
+            float availW = w - 2 * pad, availH = bottom0 - top0;
+            float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
+            float fw = frame.getWidth() * sc, fh = frame.getHeight() * sc;
+            float left = (w - fw) / 2f, top = top0 + (availH - fh) / 2f;
+            bmpPaint.setColorFilter(null);
+            c.drawBitmap(frame, null, new RectF(left, top, left + fw, top + fh), bmpPaint);
+        } else if (guiding) {
+            boolean hasArrow = (nav.dir != null && !nav.dir.equals("NONE")) || iconBmp != null;
+            if (hasArrow) drawTurn(c, cx, h * 0.17f, w * 0.30f);
+            // "859m | 교차로" 한 줄
+            String line = nav.dist + (nav.text != null && !nav.text.isEmpty() ? "  |  " + nav.text : "");
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setColor(Color.WHITE);
+            fitText(c, line, cx, hasArrow ? h * 0.33f : h * 0.25f, w - 2 * pad, w * 0.10f);
+        } else {
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setColor(Color.GRAY);
+            text.setTextSize(w * 0.065f);
+            c.drawText(lastRecv == 0 ? "신호 기다리는 중" : (stale ? "신호 끊김" : "길안내 없음"), cx, h * 0.22f, text);
+        }
+
+        // ── 가운데: 차로 그래픽 (원근감 있는 두 줄 + 내 차) ──
+        Paint lane = new Paint(Paint.ANTI_ALIAS_FLAG);
+        lane.setStyle(Paint.Style.STROKE);
+        lane.setStrokeCap(Paint.Cap.ROUND);
+        lane.setStrokeWidth(w * 0.018f);
+        float topY = h * 0.42f, botY = h * 0.66f;
+        float topHalf = w * 0.08f, botHalf = w * 0.36f;
+        lane.setColor(Color.argb(200, 255, 255, 255));
+        c.drawLine(cx - topHalf, topY, cx - botHalf, botY, lane);
+        c.drawLine(cx + topHalf, topY, cx + botHalf, botY, lane);
+        // 앞차 거리 막대 느낌의 하늘색 띠
+        Paint band = new Paint(Paint.ANTI_ALIAS_FLAG);
+        band.setColor(Color.argb(150, 120, 200, 255));
+        Path bp = new Path();
+        float by0 = topY + (botY - topY) * 0.10f, by1 = topY + (botY - topY) * 0.28f;
+        float bh0 = topHalf + (botHalf - topHalf) * 0.10f - w * 0.02f, bh1 = topHalf + (botHalf - topHalf) * 0.28f - w * 0.02f;
+        bp.moveTo(cx - bh0, by0);
+        bp.lineTo(cx + bh0, by0);
+        bp.lineTo(cx + bh1, by1);
+        bp.lineTo(cx - bh1, by1);
+        bp.close();
+        c.drawPath(bp, band);
+        // 내 차 (반원)
+        Paint car = new Paint(Paint.ANTI_ALIAS_FLAG);
+        car.setStyle(Paint.Style.STROKE);
+        car.setStrokeWidth(w * 0.02f);
+        car.setColor(color);
+        float carR = w * 0.09f, carY = botY - h * 0.01f;
+        c.drawArc(new RectF(cx - carR, carY - carR, cx + carR, carY + carR), 180, 180, false, car);
+        c.drawArc(new RectF(cx - carR * 0.6f, carY - carR * 0.6f, cx + carR * 0.6f, carY + carR * 0.6f), 180, 180, false, car);
+
+        // ── 아래: 큰 속도 ──
+        float sp = Math.min(w * 0.24f * speedScale / 1.8f + w * 0.06f, w * 0.38f);
+        float sy = h * 0.80f;
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setColor(Color.WHITE);
+        text.setTextSize(sp);
+        String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
+        c.drawText(v, cx, sy, text);
+        float vw = text.measureText(v);
+        text.setTextSize(sp * 0.22f);
+        text.setTextAlign(Paint.Align.LEFT);
+        c.drawText("km/h", cx + vw / 2f + sp * 0.05f, sy, text);
+
+        // 왼쪽: 길안내 중 표시(초록 아이콘)
+        if (guiding) {
+            Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
+            g.setColor(Color.rgb(60, 200, 90));
+            float gx = pad, gy = sy - sp * 0.45f, gs = w * 0.09f;
+            c.drawRoundRect(new RectF(gx, gy, gx + gs, gy + gs * 0.7f), gs * 0.15f, gs * 0.15f, g);
+        }
+
+        // 오른쪽: 단속·위험 경고 삼각형
+        String all = (nav != null ? nav.text + " " + nav.sub : "");
+        if (guiding && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
+            float tx = w - pad - w * 0.06f, ty = sy - sp * 0.3f, ts = w * 0.13f;
+            Path tri = new Path();
+            tri.moveTo(tx, ty - ts * 0.55f);
+            tri.lineTo(tx + ts * 0.55f, ty + ts * 0.45f);
+            tri.lineTo(tx - ts * 0.55f, ty + ts * 0.45f);
+            tri.close();
+            Paint warn = new Paint(Paint.ANTI_ALIAS_FLAG);
+            warn.setColor(Color.rgb(255, 140, 0));
+            c.drawPath(tri, warn);
+            text.setColor(Color.BLACK);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTextSize(ts * 0.5f);
+            c.drawText("!", tx, ty + ts * 0.35f, text);
+        }
+
+        // 맨 아래: 목적지
+        if (guiding && nav.sub != null && !nav.sub.isEmpty()) {
+            text.setColor(Color.LTGRAY);
+            text.setTextAlign(Paint.Align.CENTER);
+            fitText(c, "◉ " + nav.sub, cx, h * 0.90f, w - 2 * pad, w * 0.05f);
         }
     }
 
