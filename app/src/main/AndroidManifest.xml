@@ -3,6 +3,8 @@
 
     <queries>
         <package android:name="com.skt.tmap.ku" />
+        <package android:name="com.google.android.projection.gearhead" />
+        <provider android:authorities="androidx.car.app.connection" />
     </queries>
 
     <uses-permission android:name="android.permission.INTERNET" />

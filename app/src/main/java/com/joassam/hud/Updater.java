@@ -27,7 +27,7 @@ import java.util.concurrent.Executors;
  */
 public class Updater {
 
-    static final String REPO = "jojojojo2243-del/JoaHUD";
+    static final String REPO = "jojojojojo2243-del/JoaHUD";
     private static final String API = "https://api.github.com/repos/" + REPO + "/releases/latest";
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor();
 
