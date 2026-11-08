@@ -122,6 +122,12 @@ public class HudActivity extends Activity {
             prefs.edit().putInt("color", c).apply();
             hud.setColor(COLORS[c]);
         }));
+        controls.addView(ctrl("화면방향", v -> {
+            int o = (prefs.getInt("orient", 0) + 1) % ORIENT_NAMES.length;
+            prefs.edit().putInt("orient", o).apply();
+            applyOrientation();
+            android.widget.Toast.makeText(this, "화면 방향: " + ORIENT_NAMES[o], android.widget.Toast.LENGTH_SHORT).show();
+        }));
         controls.addView(ctrl("닫기", v -> finish()));
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         root.addView(controls, clp);
@@ -134,9 +140,24 @@ public class HudActivity extends Activity {
         });
 
         setContentView(root);
+        applyOrientation();
         startReceiver();
         startGps();
         handler.post(tick);
+    }
+
+    // 대시보드에 눕혀 두면 자동 회전이 불안정해서 방향을 고정
+    private static final String[] ORIENT_NAMES = {"가로 고정", "가로(반대) 고정", "세로 고정", "자동 회전"};
+    private static final int[] ORIENT_VALUES = {
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
+    };
+
+    private void applyOrientation() {
+        int o = prefs.getInt("orient", 0) % ORIENT_VALUES.length;
+        setRequestedOrientation(ORIENT_VALUES[o]);
     }
 
     private void applyMirror() {
