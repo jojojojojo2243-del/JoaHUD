@@ -25,6 +25,12 @@ public class HudView extends View {
     private long lastRecv = 0;
     private float speed = -1f;
     private int color = Color.rgb(0, 255, 102);
+    private float speedScale = 1.8f; // 길안내 중 속도 글자 배율
+
+    public void setSpeedScale(float s) {
+        speedScale = s;
+        invalidate();
+    }
 
     private Bitmap iconBmp;
     private Bitmap frame;
@@ -100,7 +106,7 @@ public class HudView extends View {
         if (frame != null && now - lastFrame < 2500) {
             // 화면 가장자리(둥근 모서리·곡면)에 잘리지 않게 안쪽 영역만 사용
             float mx = w * 0.06f, top0 = h * 0.06f;
-            float speedH = landscape ? h * 0.16f : h * 0.09f;
+            float speedH = Math.min(landscape ? h * 0.16f * speedScale : h * 0.09f * speedScale, h * 0.35f);
             float bottom0 = h * 0.86f - speedH * 1.2f;
             float availW = w - 2 * mx, availH = bottom0 - top0;
             float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
@@ -134,18 +140,20 @@ public class HudView extends View {
             fitText(c, nav.text, x, h * 0.63f, right - x, h * 0.1f);
             text.setColor(Color.LTGRAY);
             fitText(c, nav.sub, x, h * 0.76f, right - x, h * 0.075f);
-            drawSpeed(c, w * 0.82f, h * 0.86f, h * 0.15f, false);
+            drawSpeed(c, w * 0.75f, h * 0.88f, Math.min(h * 0.15f * speedScale, h * 0.4f), false);
         } else {
-            float size = Math.min(w * 0.75f, h * 0.42f);
-            drawTurn(c, w / 2f, h * 0.27f, size);
+            float sp = Math.min(h * 0.08f * speedScale, h * 0.2f);
+            float shift = sp - h * 0.08f; // 속도가 커진 만큼 위 요소를 올림
+            float size = Math.min(w * 0.7f, h * 0.36f);
+            drawTurn(c, w / 2f, h * 0.24f - shift * 0.3f, size);
             text.setTextAlign(Paint.Align.CENTER);
             text.setColor(color);
-            fitText(c, nav.dist, w / 2f, h * 0.62f, w * 0.92f, h * 0.15f);
+            fitText(c, nav.dist, w / 2f, h * 0.55f - shift * 0.6f, w * 0.92f, h * 0.13f);
             text.setColor(Color.WHITE);
-            fitText(c, nav.text, w / 2f, h * 0.72f, w * 0.94f, h * 0.05f);
+            fitText(c, nav.text, w / 2f, h * 0.64f - shift * 0.7f, w * 0.94f, h * 0.045f);
             text.setColor(Color.LTGRAY);
-            fitText(c, nav.sub, w / 2f, h * 0.78f, w * 0.94f, h * 0.04f);
-            drawSpeed(c, w / 2f, h * 0.87f, h * 0.08f, false);
+            fitText(c, nav.sub, w / 2f, h * 0.70f - shift * 0.75f, w * 0.94f, h * 0.035f);
+            drawSpeed(c, w / 2f, h * 0.88f, sp, false);
         }
     }
 

@@ -57,6 +57,8 @@ public class HudActivity extends Activity {
     };
 
     static volatile boolean visible = false;
+    private static final float[] SPEED_SCALES = {1.0f, 1.8f, 2.5f};
+    private static final String[] SPEED_NAMES = {"보통", "크게", "아주 크게"};
 
     static final int[] COLORS = {
             Color.rgb(0, 255, 102), Color.WHITE, Color.rgb(0, 229, 255), Color.rgb(255, 214, 0)
@@ -102,6 +104,7 @@ public class HudActivity extends Activity {
 
         hud = new HudView(this);
         hud.setColor(COLORS[prefs.getInt("color", 0) % COLORS.length]);
+        hud.setSpeedScale(SPEED_SCALES[prefs.getInt("speed_size", 1) % SPEED_SCALES.length]);
         root.addView(hud, new FrameLayout.LayoutParams(-1, -1));
         applyMirror();
 
@@ -121,6 +124,12 @@ public class HudActivity extends Activity {
             int c = (prefs.getInt("color", 0) + 1) % COLORS.length;
             prefs.edit().putInt("color", c).apply();
             hud.setColor(COLORS[c]);
+        }));
+        controls.addView(ctrl("속도크기", v -> {
+            int i = (prefs.getInt("speed_size", 1) + 1) % SPEED_SCALES.length;
+            prefs.edit().putInt("speed_size", i).apply();
+            hud.setSpeedScale(SPEED_SCALES[i]);
+            android.widget.Toast.makeText(this, "속도 크기: " + SPEED_NAMES[i], android.widget.Toast.LENGTH_SHORT).show();
         }));
         controls.addView(ctrl("화면방향", v -> {
             int o = (prefs.getInt("orient", 0) + 1) % ORIENT_NAMES.length;
