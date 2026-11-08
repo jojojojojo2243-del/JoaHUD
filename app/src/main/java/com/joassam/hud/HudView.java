@@ -182,18 +182,33 @@ public class HudView extends View {
             bmpPaint.setColorFilter(null);
             c.drawBitmap(frame, null, new RectF(left, top, left + fw, top + fh), bmpPaint);
         } else if (guiding) {
-            // 회전 화살표 + 남은 거리
-            float arrow = h * 0.34f;
-            float ax = pad + arrow * 0.55f, ay = h * 0.45f;
+            // 순정 HUD처럼 초록 안내 카드: [화살표 + 거리] / [회전 지점]
+            RectF card = new RectF(pad, h * 0.22f, splitX - pad * 0.5f, h * 0.86f);
+            Paint cardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            cardPaint.setColor(Color.rgb(46, 125, 79));
+            c.drawRoundRect(card, h * 0.05f, h * 0.05f, cardPaint);
+            int saved = color;
+            color = Color.WHITE;           // 카드 안은 흰 글씨·흰 화살표
+            stroke.setColor(Color.WHITE);
+            fill.setColor(Color.WHITE);
+            float arrow = card.height() * 0.48f;
+            float ax = card.left + pad * 0.4f + arrow * 0.5f, ay = card.top + card.height() * 0.36f;
             boolean hasArrow = (nav.dir != null && !nav.dir.equals("NONE")) || iconBmp != null;
             if (hasArrow) drawTurn(c, ax, ay, arrow);
-            float dx = hasArrow ? pad + arrow * 1.15f : pad;
+            float dx = hasArrow ? ax + arrow * 0.6f : card.left + pad * 0.5f;
             text.setTextAlign(Paint.Align.LEFT);
-            text.setColor(color);
-            fitText(c, nav.dist, dx, h * 0.55f, splitX - dx, h * 0.24f);
-            // 아래: 회전 지점 이름(교차로 등)
             text.setColor(Color.WHITE);
-            fitText(c, nav.text, pad, h * 0.80f, splitX - pad, h * 0.09f);
+            fitText(c, nav.dist, dx, card.top + card.height() * 0.50f, card.right - dx - pad * 0.3f, card.height() * 0.36f);
+            // 구분선 아래: 회전 지점 이름(교차로 등)
+            Paint line = new Paint();
+            line.setColor(Color.argb(120, 255, 255, 255));
+            float ly = card.top + card.height() * 0.64f;
+            c.drawLine(card.left + pad * 0.3f, ly, card.right - pad * 0.3f, ly, line);
+            fitText(c, nav.text, card.left + pad * 0.5f, card.top + card.height() * 0.88f,
+                    card.width() - pad, card.height() * 0.2f);
+            color = saved;
+            stroke.setColor(color);
+            fill.setColor(color);
         } else {
             text.setTextAlign(Paint.Align.LEFT);
             text.setColor(Color.GRAY);
@@ -208,6 +223,24 @@ public class HudView extends View {
         text.setTextSize(speedSize);
         String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
         c.drawText(v, speedCx, speedBase + speedSize * 0.35f, text);
+
+        // 단속·위험 안내 문구가 있으면 오른쪽에 주황 삼각형 경고
+        String all = (nav != null ? nav.text + " " + nav.sub : "");
+        if (guiding && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
+            float tx = w * 0.90f, ty = h * 0.55f, ts = h * 0.30f;
+            Path tri = new Path();
+            tri.moveTo(tx, ty - ts * 0.55f);
+            tri.lineTo(tx + ts * 0.55f, ty + ts * 0.45f);
+            tri.lineTo(tx - ts * 0.55f, ty + ts * 0.45f);
+            tri.close();
+            Paint warn = new Paint(Paint.ANTI_ALIAS_FLAG);
+            warn.setColor(Color.rgb(255, 140, 0));
+            c.drawPath(tri, warn);
+            text.setColor(Color.BLACK);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTextSize(ts * 0.45f);
+            c.drawText("!", tx, ty + ts * 0.32f, text);
+        }
 
         // 속도 아래: 목적지
         if (guiding && nav.sub != null && !nav.sub.isEmpty()) {
