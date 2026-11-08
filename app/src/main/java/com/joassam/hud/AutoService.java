@@ -109,8 +109,18 @@ public class AutoService extends Service {
         return START_STICKY;
     }
 
+    private long lastUpdateCheck = 0;
+
     private void check() {
         int st = queryCarState();
+        // 주차 중(차량 미연결)이고 인터넷이 될 때 15분마다 업데이트 확인·설치
+        // (운전 중에는 HUD가 꺼지지 않도록 설치하지 않음)
+        long now = System.currentTimeMillis();
+        if (st == 0 && now - lastUpdateCheck > 15 * 60_000L && hasInternet()
+                && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("auto_update", true)) {
+            lastUpdateCheck = now;
+            Updater.check(this, true, null);
+        }
         carState = st;
         boolean connected = st != 0;
         if (connected && !wasConnected) onCarConnected();
@@ -151,6 +161,8 @@ public class AutoService extends Service {
         NavListenerService.log("안드로이드 오토 해제됨");
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
+        // 시동 끄면 1분 뒤 바로 업데이트 확인
+        lastUpdateCheck = System.currentTimeMillis() - 14 * 60_000L;
     }
 
     private void launchHud() {

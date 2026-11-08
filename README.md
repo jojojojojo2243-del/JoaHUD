@@ -1,5 +1,12 @@
 # 조아 HUD — 안 쓰는 폰을 헤드업 디스플레이로
 
+## 🔄 자동 업데이트
+- GitHub에 수정본을 올리면 Actions가 APK를 만들어 **Releases**에 올립니다.
+- 서브폰 앱은 앱을 열 때와, 주차 중(차량 미연결 + 인터넷 연결)일 때 15분마다 새 버전을 확인해 설치합니다.
+- **저장소가 공개(Public)여야** 폰이 로그인 없이 받을 수 있습니다. 설정 → General → 맨 아래 Change visibility → Public
+- 최신 설치 파일 직접 받기: https://github.com/jojojojojo2243-del/JoaHUD/releases/latest
+- 첫 자동 업데이트 때 한 번은 "설치" 확인 창이 뜰 수 있습니다. 그 뒤로는 Android 12 이상에서 확인 없이 설치됩니다.
+
 ## 🚗 차량 자동 모드 (권장 구성)
 
 ```
