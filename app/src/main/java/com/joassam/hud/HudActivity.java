@@ -56,7 +56,9 @@ public class HudActivity extends Activity {
         }
     };
 
-    private static final int[] COLORS = {
+    static volatile boolean visible = false;
+
+    static final int[] COLORS = {
             Color.rgb(0, 255, 102), Color.WHITE, Color.rgb(0, 229, 255), Color.rgb(255, 214, 0)
     };
 
@@ -232,6 +234,18 @@ public class HudActivity extends Activity {
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 500, 0, locListener, Looper.getMainLooper());
         } catch (Exception ignored) {
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        visible = true;
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false;
+        super.onPause();
     }
 
     @Override

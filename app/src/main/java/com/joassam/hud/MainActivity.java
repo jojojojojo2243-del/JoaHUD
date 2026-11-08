@@ -136,10 +136,19 @@ public class MainActivity extends Activity {
         });
         root.addView(overlay);
 
+        Button a11y = button("⑥ 티맵 안내판 읽기 허용 (설치된 앱 → 조아 HUD 켜기)");
+        a11y.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        CheckBox white = new CheckBox(this);
+        white.setText("안내판의 흰 글씨만 HUD 색으로 표시 (끄면 티맵 색 그대로)");
+        white.setChecked(p.getBoolean("white_only", true));
+        white.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("white_only", on).apply());
+
         Button batt = button("③ 배터리 제한 없음 (꺼짐 방지)");
         batt.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + getPackageName()))));
         root.addView(batt);
+        root.addView(a11y);
+        root.addView(white);
 
         root.addView(note("④ 인터넷 받을 가족 폰 선택 (먼저 블루투스로 페어링되어 있어야 함, 여러 대 가능)\n"
                 + "   각 가족 폰: 설정 → 연결 → 모바일 핫스팟 및 테더링 → '블루투스 테더링' 켜기"));
@@ -428,7 +437,8 @@ public class MainActivity extends Activity {
         if (autoStatus != null) {
             String car = AutoService.carState == 0 ? "차량 미연결" : "🚗 안드로이드 오토 연결됨";
             autoStatus.setText((AutoService.running ? "🟢 자동 모드 동작 중 · " : "⚪ 자동 모드 꺼짐 · ")
-                    + car + (AutoService.netStatus.isEmpty() ? "" : " · " + AutoService.netStatus));
+                    + car + (AutoService.netStatus.isEmpty() ? "" : " · " + AutoService.netStatus)
+                    + "\n⑥ 티맵 안내판 읽기: " + (TmapA11yService.connected ? "✅ 켜짐 " + TmapA11yService.status : "❌ 꺼짐"));
         }
         String s = CaptureService.running ? "🟢 " + CaptureService.status : "⚪ 화면 전송 꺼짐 " + CaptureService.status;
         capStatus.setText(s);
