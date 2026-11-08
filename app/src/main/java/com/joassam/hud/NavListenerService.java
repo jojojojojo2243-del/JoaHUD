@@ -90,7 +90,7 @@ public class NavListenerService extends NotificationListenerService {
         if (!watched && !logAll) return;
 
         NavData d = NavParser.parse(this, sbn);
-        log((watched ? "★ " : "") + pkg + "\n   → [" + d.dir + " " + d.dist + "] " + d.raw);
+        log((watched ? "★ " : "") + pkg + "\n   → [" + d.dir + " " + d.dist + (d.icon.isEmpty() ? " 그림없음" : " 그림있음") + "] " + d.raw);
         if (!watched || d.raw.isEmpty()) return;
 
         // "실행 중" 같은 상태 알림이 진짜 안내를 덮어쓰지 않도록

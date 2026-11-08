@@ -102,11 +102,18 @@ public class HudView extends View {
         stroke.setColor(color);
         fill.setColor(color);
 
+        boolean hasFrame = frame != null && now - lastFrame < 2500;
+
+        // ── 가로 화면: 순정 HUD 스타일 (왼쪽 회전안내 · 가운데 큰 속도 · 위 시계) ──
+        if (landscape) {
+            drawLandscapeHud(c, w, h, guiding, stale, hasFrame);
+            return;
+        }
+
         // 티맵 화면 전송 모드: 받은 안내판을 그대로 크게
-        if (frame != null && now - lastFrame < 2500) {
-            // 화면 가장자리(둥근 모서리·곡면)에 잘리지 않게 안쪽 영역만 사용
+        if (hasFrame) {
             float mx = w * 0.06f, top0 = h * 0.06f;
-            float speedH = Math.min(landscape ? h * 0.16f * speedScale : h * 0.09f * speedScale, h * 0.35f);
+            float speedH = Math.min(h * 0.09f * speedScale, h * 0.35f);
             float bottom0 = h * 0.86f - speedH * 1.2f;
             float availW = w - 2 * mx, availH = bottom0 - top0;
             float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
@@ -119,7 +126,6 @@ public class HudView extends View {
         }
 
         if (!guiding) {
-            // 길안내 없음: 속도 크게 + 상태
             drawSpeed(c, w / 2f, h * 0.55f, Math.min(w, h) * 0.45f, true);
             text.setColor(Color.GRAY);
             text.setTextAlign(Paint.Align.CENTER);
@@ -129,19 +135,7 @@ public class HudView extends View {
             return;
         }
 
-        if (landscape) {
-            float size = Math.min(w * 0.42f, h * 0.8f);
-            drawTurn(c, w * 0.25f, h * 0.48f, size);
-            float x = w * 0.5f, right = w * 0.97f;
-            text.setTextAlign(Paint.Align.LEFT);
-            text.setColor(color);
-            fitText(c, nav.dist, x, h * 0.45f, right - x, h * 0.36f);
-            text.setColor(Color.WHITE);
-            fitText(c, nav.text, x, h * 0.63f, right - x, h * 0.1f);
-            text.setColor(Color.LTGRAY);
-            fitText(c, nav.sub, x, h * 0.76f, right - x, h * 0.075f);
-            drawSpeed(c, w * 0.75f, h * 0.88f, Math.min(h * 0.15f * speedScale, h * 0.4f), false);
-        } else {
+        {
             float sp = Math.min(h * 0.08f * speedScale, h * 0.2f);
             float shift = sp - h * 0.08f; // 속도가 커진 만큼 위 요소를 올림
             float size = Math.min(w * 0.7f, h * 0.36f);
@@ -154,6 +148,72 @@ public class HudView extends View {
             text.setColor(Color.LTGRAY);
             fitText(c, nav.sub, w / 2f, h * 0.70f - shift * 0.75f, w * 0.94f, h * 0.035f);
             drawSpeed(c, w / 2f, h * 0.88f, sp, false);
+        }
+    }
+
+    /**
+     * 가로 HUD
+     *  ┌──────────────────────────────────────┐
+     *  │                               11:13  │
+     *  │  ↰ 7.3km          64                 │
+     *  │  교차로            📍 목적지           │
+     *  └──────────────────────────────────────┘
+     */
+    private void drawLandscapeHud(Canvas c, int w, int h, boolean guiding, boolean stale, boolean hasFrame) {
+        float pad = h * 0.08f;
+        // 위: 시계 (오른쪽)
+        text.setColor(Color.WHITE);
+        text.setTextAlign(Paint.Align.RIGHT);
+        text.setTextSize(h * 0.10f);
+        c.drawText(clock.format(new Date()), w - pad, pad + h * 0.08f, text);
+
+        float splitX = w * 0.46f;          // 왼쪽 안내 영역 끝
+        float speedCx = w * 0.70f;         // 속도 가운데
+        float speedSize = Math.min(h * 0.42f * speedScale / 1.8f, h * 0.62f);
+        float speedBase = h * 0.60f;
+
+        if (hasFrame) {
+            // 차량 화면에서 잘라온 안내 카드를 왼쪽에
+            float top0 = h * 0.20f, bottom0 = h * 0.88f;
+            float availW = splitX - pad * 1.5f, availH = bottom0 - top0;
+            float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
+            float fw = frame.getWidth() * sc, fh = frame.getHeight() * sc;
+            float left = pad, top = top0 + (availH - fh) / 2f;
+            bmpPaint.setColorFilter(null);
+            c.drawBitmap(frame, null, new RectF(left, top, left + fw, top + fh), bmpPaint);
+        } else if (guiding) {
+            // 회전 화살표 + 남은 거리
+            float arrow = h * 0.34f;
+            float ax = pad + arrow * 0.55f, ay = h * 0.45f;
+            boolean hasArrow = (nav.dir != null && !nav.dir.equals("NONE")) || iconBmp != null;
+            if (hasArrow) drawTurn(c, ax, ay, arrow);
+            float dx = hasArrow ? pad + arrow * 1.15f : pad;
+            text.setTextAlign(Paint.Align.LEFT);
+            text.setColor(color);
+            fitText(c, nav.dist, dx, h * 0.55f, splitX - dx, h * 0.24f);
+            // 아래: 회전 지점 이름(교차로 등)
+            text.setColor(Color.WHITE);
+            fitText(c, nav.text, pad, h * 0.80f, splitX - pad, h * 0.09f);
+        } else {
+            text.setTextAlign(Paint.Align.LEFT);
+            text.setColor(Color.GRAY);
+            text.setTextSize(h * 0.08f);
+            String msg = lastRecv == 0 ? "신호 기다리는 중" : (stale ? "신호 끊김" : "길안내 없음");
+            c.drawText(msg, pad, h * 0.55f, text);
+        }
+
+        // 가운데 큰 속도
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setColor(Color.WHITE);
+        text.setTextSize(speedSize);
+        String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
+        c.drawText(v, speedCx, speedBase + speedSize * 0.35f, text);
+
+        // 속도 아래: 목적지
+        if (guiding && nav.sub != null && !nav.sub.isEmpty()) {
+            text.setColor(Color.LTGRAY);
+            text.setTextAlign(Paint.Align.CENTER);
+            fitText(c, "◉ " + nav.sub, speedCx, h * 0.90f, w - splitX - pad, h * 0.075f);
         }
     }
 
@@ -179,6 +239,15 @@ public class HudView extends View {
             text.setTextSize(ts);
         }
         String out = s;
+        // 짧은 글자(거리 등)는 자르지 않고 줄이기만 함
+        if (s.length() <= 10) {
+            while (text.measureText(s) > maxW && ts > 8) {
+                ts *= 0.9f;
+                text.setTextSize(ts);
+            }
+            c.drawText(s, x, baseline, text);
+            return;
+        }
         while (out.length() > 1 && text.measureText(out + "…") > maxW) {
             out = out.substring(0, out.length() - 1);
         }

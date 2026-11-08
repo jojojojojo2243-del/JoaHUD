@@ -27,6 +27,9 @@ import java.util.regex.Pattern;
 /** 내비 앱 알림에서 방향/거리/문구를 뽑아낸다 */
 public class NavParser {
 
+    private static final Pattern DIST_ONLY = Pattern.compile(
+            "^\\s*\\d+(?:[.,]\\d+)?\\s*(km|m)\\s*$", Pattern.CASE_INSENSITIVE);
+
     private static final Pattern DIST = Pattern.compile(
             "(\\d+(?:[.,]\\d+)?)\\s*(km|킬로미터|m|미터)(?![a-zA-Z])",
             Pattern.CASE_INSENSITIVE);
@@ -90,7 +93,29 @@ public class NavParser {
         d.dist = detectDist(parts);
         d.text = parts.get(0);
         if (parts.size() > 1) d.sub = parts.get(1);
+
+        // 티맵 형식: 경로주행 | 출발 > 도착 | 교차로 | 857m
+        //  → 큰 글자: 857m, 안내: 교차로, 아래: 도착지
+        for (int i = 0; i < parts.size(); i++) {
+            if (DIST_ONLY.matcher(parts.get(i)).matches()) {
+                if (i > 0 && !parts.get(i - 1).contains(">")) d.text = parts.get(i - 1);
+                for (String p2 : parts) {
+                    int k = p2.lastIndexOf('>');
+                    if (k >= 0) {
+                        d.sub = p2.substring(k + 1).trim();
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
         d.icon = iconBase64(ctx, n);
+        // 큰 아이콘이 없으면 알림 화면(RemoteViews) 안의 그림(회전 화살표)을 찾아본다
+        if (d.icon.isEmpty()) {
+            d.icon = imageFromRemoteViews(ctx, n.bigContentView);
+            if (d.icon.isEmpty()) d.icon = imageFromRemoteViews(ctx, n.contentView);
+        }
         if (d.icon.isEmpty() && e != null) d.icon = carIconBase64(e);
         return d;
     }
@@ -170,6 +195,45 @@ public class NavParser {
             }
         }
         return "";
+    }
+
+    /** 알림 레이아웃 속 가장 큰 그림(티맵 회전 화살표 아이콘 등)을 PNG base64로 */
+    private static String imageFromRemoteViews(Context ctx, RemoteViews rv) {
+        if (rv == null) return "";
+        try {
+            View v = rv.apply(ctx, new FrameLayout(ctx));
+            List<Drawable> found = new ArrayList<>();
+            collectImages(v, found);
+            Drawable best = null;
+            int bestArea = 0;
+            for (Drawable dr : found) {
+                int a = Math.max(1, dr.getIntrinsicWidth()) * Math.max(1, dr.getIntrinsicHeight());
+                if (a > bestArea) {
+                    bestArea = a;
+                    best = dr;
+                }
+            }
+            if (best == null) return "";
+            Bitmap bmp = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(bmp);
+            best.setBounds(0, 0, 128, 128);
+            best.draw(c);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, out);
+            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static void collectImages(View v, List<Drawable> out) {
+        if (v instanceof android.widget.ImageView) {
+            Drawable dr = ((android.widget.ImageView) v).getDrawable();
+            if (dr != null && v.getVisibility() == View.VISIBLE) out.add(dr);
+        } else if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) collectImages(g.getChildAt(i), out);
+        }
     }
 
     private static List<String> fromRemoteViews(Context ctx, RemoteViews rv) {
