@@ -5,62 +5,48 @@ import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
-import android.content.ComponentName;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.media.projection.MediaProjectionManager;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
-import android.view.View;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.HashSet;
 import java.util.Set;
 
+/** 메인 화면: 상태 한눈에 + HUD 시작 + 남은 설정만 + 고급 설정(접힘) */
 public class MainActivity extends Activity {
 
     static volatile boolean visible = false;
-    private static final int REQ_CAPTURE = 11;
 
     private SharedPreferences p;
-    private TextView status, capStatus, logView, editMode, autoStatus;
-    private LinearLayout familyBox;
-    private TextView updStatus;
-    private boolean updChecked = false;
-
-    private void showUpd(String m) {
-        if (updStatus != null) updStatus.setText("현재 버전 v" + Updater.currentVersion(this) + " · " + m);
-    }
-    private CropPreview cropView;
-    private final SeekBar[] crop = new SeekBar[4];
-    private boolean editLand = false;
+    private TextView statusTitle, statusDetail, versionLine, logView;
+    private LinearLayout todoBox, advanced, familyBox;
+    private Button advToggle;
     private int testStep = 0;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable poll = new Runnable() {
         @Override
         public void run() {
-            updateCapture();
-            handler.postDelayed(this, 700);
+            refresh();
+            handler.postDelayed(this, 1500);
         }
     };
 
@@ -68,368 +54,296 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         p = getSharedPreferences("hud", MODE_PRIVATE);
+        // 처음 쓰는 사람도 자동 모드는 기본으로 켜 둠
+        if (!p.contains("auto_mode")) p.edit().putBoolean("auto_mode", true).apply();
 
         ScrollView sv = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(16);
+        int pad = dp(18);
         root.setPadding(pad, pad, pad, pad);
         sv.addView(root);
 
-        // ── 업데이트 ──
-        root.addView(header("🔄 앱 업데이트"));
-        updStatus = new TextView(this);
-        updStatus.setTextSize(15);
-        updStatus.setText("현재 버전 v" + Updater.currentVersion(this));
-        root.addView(updStatus);
-        CheckBox autoUpd = new CheckBox(this);
-        autoUpd.setText("자동 업데이트 (앱을 열 때 + 주차 중 15분마다)");
-        autoUpd.setChecked(p.getBoolean("auto_update", true));
-        autoUpd.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("auto_update", on).apply());
-        root.addView(autoUpd);
-        LinearLayout urow = new LinearLayout(this);
-        Button chk = button("지금 업데이트");
-        chk.setOnClickListener(v -> Updater.check(this, true, this::showUpd));
-        Button perm2 = button("설치 권한 허용");
-        perm2.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT >= 26) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:" + getPackageName())));
-            }
+        // ── 1. 상태 카드 ──
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(16), dp(18), dp(16));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(245, 245, 245));
+        bg.setCornerRadius(dp(14));
+        card.setBackground(bg);
+        statusTitle = new TextView(this);
+        statusTitle.setTextSize(22);
+        statusTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(statusTitle);
+        statusDetail = new TextView(this);
+        statusDetail.setTextSize(15);
+        statusDetail.setTextColor(Color.DKGRAY);
+        statusDetail.setPadding(0, dp(6), 0, 0);
+        card.addView(statusDetail);
+        root.addView(card);
+
+        // ── 2. 큰 시작 버튼 ──
+        Button start = new Button(this);
+        start.setText("▶  HUD 시작");
+        start.setTextSize(20);
+        start.setAllCaps(false);
+        start.setTextColor(Color.WHITE);
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(Color.rgb(30, 140, 70));
+        sbg.setCornerRadius(dp(14));
+        start.setBackground(sbg);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(64));
+        slp.topMargin = dp(14);
+        root.addView(start, slp);
+        start.setOnClickListener(v -> startHud());
+
+        // ── 3. 아직 안 한 설정만 ──
+        todoBox = new LinearLayout(this);
+        todoBox.setOrientation(LinearLayout.VERTICAL);
+        todoBox.setPadding(0, dp(10), 0, 0);
+        root.addView(todoBox);
+
+        // ── 4. 버전 한 줄 ──
+        versionLine = new TextView(this);
+        versionLine.setTextSize(13);
+        versionLine.setTextColor(Color.GRAY);
+        versionLine.setGravity(Gravity.CENTER);
+        versionLine.setPadding(0, dp(18), 0, 0);
+        versionLine.setOnClickListener(v -> Updater.check(this, true, m -> refresh()));
+        root.addView(versionLine);
+
+        // ── 5. 고급 설정 (접힘) ──
+        advToggle = new Button(this);
+        advToggle.setAllCaps(false);
+        advToggle.setText("고급 설정 ▸");
+        advToggle.setBackgroundColor(Color.TRANSPARENT);
+        advToggle.setTextColor(Color.GRAY);
+        root.addView(advToggle);
+        advanced = new LinearLayout(this);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        advanced.setVisibility(View.GONE);
+        root.addView(advanced);
+        advToggle.setOnClickListener(v -> {
+            boolean show = advanced.getVisibility() != View.VISIBLE;
+            advanced.setVisibility(show ? View.VISIBLE : View.GONE);
+            advToggle.setText(show ? "고급 설정 ▾" : "고급 설정 ▸");
+            if (show) loadFamily();
         });
-        urow.addView(chk, new LinearLayout.LayoutParams(0, -2, 1f));
-        urow.addView(perm2, new LinearLayout.LayoutParams(0, -2, 1f));
-        root.addView(urow);
-
-        // ── 차량용 서브폰 자동 모드 ──
-        root.addView(header("🚗 차량 자동 모드 (서브폰)"));
-        root.addView(note("서브폰을 차량 안드로이드 오토에 등록해 두면, 시동을 걸어 연결되는 순간 "
-                + "차량 화면에는 티맵, 서브폰 화면에는 HUD가 자동으로 나옵니다.\n"
-                + "아래 ①~⑤를 한 번만 설정하세요."));
-        autoStatus = new TextView(this);
-        autoStatus.setTextSize(15);
-        root.addView(autoStatus);
-
-        CheckBox autoMode = new CheckBox(this);
-        autoMode.setText("자동 모드 켜기 (폰을 켜면 자동 시작)");
-        autoMode.setChecked(p.getBoolean("auto_mode", false));
-        autoMode.setOnCheckedChangeListener((c, on) -> {
-            p.edit().putBoolean("auto_mode", on).apply();
-            if (on) {
-                askBluetooth();
-                AutoService.start(this);
-            } else {
-                stopService(new Intent(this, AutoService.class));
-            }
-        });
-        root.addView(autoMode);
-
-        Button notiPerm = button("① 알림 접근 허용 (티맵 길안내 읽기)");
-        notiPerm.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
-        root.addView(notiPerm);
-
-        Button overlay = button("② 다른 앱 위에 표시 허용 (HUD 자동 실행)");
-        overlay.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT >= 23) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName())));
-            }
-        });
-        root.addView(overlay);
-
-        Button a11y = button("⑥ 티맵 안내판 읽기 허용 (설치된 앱 → 조아 HUD 켜기)");
-        a11y.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        CheckBox white = new CheckBox(this);
-        white.setText("안내판의 흰 글씨만 HUD 색으로 표시 (끄면 티맵 색 그대로)");
-        white.setChecked(p.getBoolean("white_only", true));
-        white.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("white_only", on).apply());
-
-        Button batt = button("③ 배터리 제한 없음 (꺼짐 방지)");
-        batt.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName()))));
-        root.addView(batt);
-        root.addView(a11y);
-        root.addView(white);
-
-        root.addView(note("④ 인터넷 받을 가족 폰 선택 (먼저 블루투스로 페어링되어 있어야 함, 여러 대 가능)\n"
-                + "   각 가족 폰: 설정 → 연결 → 모바일 핫스팟 및 테더링 → '블루투스 테더링' 켜기"));
-        familyBox = new LinearLayout(this);
-        familyBox.setOrientation(LinearLayout.VERTICAL);
-        root.addView(familyBox);
-        Button reloadFam = button("페어링된 폰 목록 새로고침");
-        reloadFam.setOnClickListener(v -> {
-            askBluetooth();
-            loadFamily();
-        });
-        root.addView(reloadFam);
-        Button btSet = button("블루투스 설정 열기 (폰 ⚙ → '인터넷 액세스' 켜기)");
-        btSet.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
-        root.addView(btSet);
-
-        root.addView(note("⑤ 차량 블루투스 설정에서 서브폰은 '통화' 끄고 '안드로이드 오토/미디어'만 사용. "
-                + "통화는 메인폰(가족 폰)이 차량에 연결되어 받습니다."));
-
-        CheckBox autoClose = new CheckBox(this);
-        autoClose.setText("안드로이드 오토가 끊기면 HUD 자동 종료");
-        autoClose.setChecked(p.getBoolean("auto_close", true));
-        autoClose.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("auto_close", on).apply());
-        root.addView(autoClose);
-
-        // ── 서브폰 ──
-        root.addView(header("서브폰 (HUD 화면)"));
-        root.addView(note("메인폰 핫스팟에 연결한 뒤 시작하세요. 화면을 탭하면 반전/색상 메뉴가 나옵니다."));
-        Button hud = button("▶ HUD 시작");
-        hud.setOnClickListener(v -> startHud());
-        root.addView(hud);
-
-        // ── (예전 방식) 메인폰 화면 전송: 차량 모드에서는 쓰지 않으므로 숨김 ──
-        LinearLayout legacy = new LinearLayout(this);
-        legacy.setOrientation(LinearLayout.VERTICAL);
-        legacy.setVisibility(View.GONE);
-        root.addView(legacy);
-        // ── 메인폰: 티맵 화면 전송 ──
-        legacy.addView(header("메인폰 ① 티맵 화면 전송 (권장)"));
-        legacy.addView(note("티맵 화면의 회전 안내판을 잘라 서브폰에 그대로 띄웁니다.\n"
-                + "화살표·차로·단속카메라까지 티맵과 똑같이 보입니다.\n"
-                + "• 시작 → '전체 화면' 공유 선택 (Android 14+는 '티맵' 앱만 선택해도 됨)\n"
-                + "• 티맵 길안내 화면을 켜 두세요"));
-        capStatus = new TextView(this);
-        capStatus.setTextSize(15);
-        legacy.addView(capStatus);
-
-        LinearLayout row = new LinearLayout(this);
-        Button start = button("● 전송 시작");
-        start.setOnClickListener(v -> startCapture());
-        Button stop = button("■ 중지");
-        stop.setOnClickListener(v -> startService(new Intent(this, CaptureService.class)
-                .setAction(CaptureService.ACTION_STOP)));
-        row.addView(start, new LinearLayout.LayoutParams(0, -2, 1f));
-        row.addView(stop, new LinearLayout.LayoutParams(0, -2, 1f));
-        legacy.addView(row);
-
-        Button tmap = button("티맵 열기");
-        tmap.setOnClickListener(v -> {
-            Intent i = getPackageManager().getLaunchIntentForPackage("com.skt.tmap.ku");
-            if (i != null) startActivity(i);
-            else Toast.makeText(this, "티맵이 설치되어 있지 않습니다", Toast.LENGTH_SHORT).show();
-        });
-        legacy.addView(tmap);
-
-        legacy.addView(header("자를 영역 설정"));
-        legacy.addView(note("전송 중에 티맵 길안내 화면을 띄웠다가 이 앱으로 돌아오면, 마지막 티맵 화면에 빨간 네모가 표시됩니다. "
-                + "네모가 회전 안내판을 감싸도록 조절하세요. 세로/가로는 따로 저장됩니다."));
-        editMode = new TextView(this);
-        editMode.setTypeface(Typeface.DEFAULT_BOLD);
-        legacy.addView(editMode);
-        LinearLayout orow = new LinearLayout(this);
-        Button bp = button("세로 화면용");
-        bp.setOnClickListener(v -> setEditLand(false));
-        Button bl = button("가로 화면용");
-        bl.setOnClickListener(v -> setEditLand(true));
-        Button reset = button("기본값");
-        reset.setOnClickListener(v -> {
-            int[] d = editLand ? CropPresets.LAND_DEFAULT : CropPresets.PORT_DEFAULT;
-            SharedPreferences.Editor e = p.edit();
-            for (int i = 0; i < 4; i++) {
-                crop[i].setProgress(d[i]);
-                e.putInt(key() + "ltrb".charAt(i), d[i]);
-            }
-            e.apply();
-            cropView.invalidate();
-        });
-        orow.addView(bp, new LinearLayout.LayoutParams(0, -2, 1f));
-        orow.addView(bl, new LinearLayout.LayoutParams(0, -2, 1f));
-        orow.addView(reset, new LinearLayout.LayoutParams(0, -2, 1f));
-        legacy.addView(orow);
-
-        cropView = new CropPreview(this);
-        legacy.addView(cropView, new LinearLayout.LayoutParams(-1, dp(360)));
-
-        String[] names = {"왼쪽", "위", "오른쪽", "아래"};
-        for (int i = 0; i < 4; i++) {
-            final int idx = i;
-            legacy.addView(note(names[i] + " (%)"));
-            crop[i] = new SeekBar(this);
-            crop[i].setMax(100);
-            crop[i].setOnSeekBarChangeListener(new SimpleSeek(v -> {
-                p.edit().putInt(key() + "ltrb".charAt(idx), v).apply();
-                cropView.invalidate();
-            }));
-            legacy.addView(crop[i]);
-        }
-
-        legacy.addView(note("검정 처리 강도 (어두운 배경을 완전 검정으로 → 앞유리에 뿌옇게 비치는 것 방지)"));
-        SeekBar black = new SeekBar(this);
-        black.setMax(160);
-        black.setProgress(p.getInt("black", 70));
-        black.setOnSeekBarChangeListener(new SimpleSeek(v -> p.edit().putInt("black", v).apply()));
-        legacy.addView(black);
-
-        legacy.addView(note("초당 전송 장수 (높을수록 부드럽지만 배터리·발열 증가)"));
-        SeekBar fps = new SeekBar(this);
-        fps.setMax(15);
-        fps.setProgress(p.getInt("fps", 8));
-        fps.setOnSeekBarChangeListener(new SimpleSeek(v -> p.edit().putInt("fps", Math.max(1, v)).apply()));
-        legacy.addView(fps);
-
-        // ── 메인폰: 알림 방식 ──
-        root.addView(header("알림 접근 상태"));
-        status = new TextView(this);
-        status.setTextSize(15);
-        root.addView(status);
-        root.addView(note("티맵 화면 전송이 끊겼을 때 대신 쓰는 방식입니다. 알림 접근 허용이 필요합니다.\n"
-                + "'제한된 설정' 이라며 막히면: 앱 정보 → 우측 위 ⋮ → '제한된 설정 허용'"));
-        Button perm = button("알림 접근 허용 열기");
-        perm.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
-        root.addView(perm);
-        Button appInfo = button("앱 정보 열기 (제한된 설정 허용용)");
-        appInfo.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName()))));
-        root.addView(appInfo);
-
-        // ── 공통 ──
-        root.addView(header("연결"));
-        Button hotspot = button("핫스팟 설정 열기");
-        hotspot.setOnClickListener(v -> {
-            try {
-                Intent i = new Intent();
-                i.setComponent(new ComponentName("com.android.settings", "com.android.settings.TetherSettings"));
-                startActivity(i);
-            } catch (Exception e) {
-                startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS));
-            }
-        });
-        root.addView(hotspot);
-        Button battery = button("배터리 최적화 해제 (끊김 방지)");
-        battery.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-            } catch (Exception e) {
-                Toast.makeText(this, "설정 → 앱 → 조아 HUD → 배터리 → 제한 없음", Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(battery);
-        Button test = button("테스트 신호 보내기 (누를 때마다 바뀜)");
-        test.setOnClickListener(v -> {
-            NavListenerService.sendTest(testStep++);
-            Toast.makeText(this, "보냄 — 서브폰 화면을 확인하세요", Toast.LENGTH_SHORT).show();
-        });
-        root.addView(test);
-
-        // ── 고급 ──
-        root.addView(header("고급"));
-        CheckBox all = new CheckBox(this);
-        all.setText("모든 앱 알림 기록 (내비 앱 패키지명 확인용)");
-        all.setChecked(p.getBoolean("log_all", false));
-        all.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("log_all", on).apply());
-        root.addView(all);
-        root.addView(note("추가로 감시할 내비 앱 패키지명 (쉼표로 구분)"));
-        EditText extra = new EditText(this);
-        extra.setText(p.getString("extra_pkgs", ""));
-        extra.setHint("예: com.example.navi");
-        root.addView(extra);
-        Button save = button("저장");
-        save.setOnClickListener(v -> {
-            p.edit().putString("extra_pkgs", extra.getText().toString().trim()).apply();
-            Toast.makeText(this, "저장됨", Toast.LENGTH_SHORT).show();
-        });
-        root.addView(save);
-
-        root.addView(header("받은 알림 기록"));
-        Button refresh = button("새로고침");
-        refresh.setOnClickListener(v -> refresh());
-        root.addView(refresh);
-        logView = new TextView(this);
-        logView.setTextSize(12);
-        logView.setTypeface(Typeface.MONOSPACE);
-        logView.setTextIsSelectable(true);
-        root.addView(logView);
+        buildAdvanced();
 
         setContentView(sv);
-        setEditLand(false);
-        // 예전 화면 전송이 켜져 있으면 끄기 (HUD가 검은 화면만 나오는 원인)
-        if (CaptureService.running) {
-            startService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_STOP));
-        }
-        loadFamily();
-        if (p.getBoolean("auto_mode", false)) AutoService.start(this);
-        if (!updChecked) {
-            updChecked = true;
-            Updater.check(this, p.getBoolean("auto_update", true), this::showUpd);
-        }
 
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
         }
-    }
-
-    private String key() {
-        return editLand ? "land_" : "port_";
-    }
-
-    private void setEditLand(boolean land) {
-        editLand = land;
-        editMode.setText(land ? "편집 중: 가로 화면용 영역" : "편집 중: 세로 화면용 영역");
-        int[] d = land ? CropPresets.LAND_DEFAULT : CropPresets.PORT_DEFAULT;
-        String k = key();
-        String ks = "ltrb";
-        for (int i = 0; i < 4; i++) {
-            int v = p.getInt(k + ks.charAt(i), d[i]);
-            crop[i].setProgress(v);
+        if (CaptureService.running) {
+            startService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_STOP));
         }
-        cropView.invalidate();
+        if (p.getBoolean("auto_mode", true)) AutoService.start(this);
+        if (p.getBoolean("auto_update", true)) Updater.check(this, true, m -> refresh());
     }
 
-    private int cropVal(int i) {
-        int[] d = editLand ? CropPresets.LAND_DEFAULT : CropPresets.PORT_DEFAULT;
-        return p.getInt(key() + "ltrb".charAt(i), d[i]);
+    // ───────── 상태 점검 ─────────
+
+    private boolean notiOk() {
+        String s = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        return s != null && s.contains(getPackageName());
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        visible = true;
-        Bitmap snap = CaptureService.snapshot;
-        if (snap != null && (snap.getWidth() > snap.getHeight()) != editLand) {
-            setEditLand(snap.getWidth() > snap.getHeight());
+    private boolean overlayOk() {
+        return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
+    }
+
+    private boolean a11yOk() {
+        String s = Settings.Secure.getString(getContentResolver(), "enabled_accessibility_services");
+        return TmapA11yService.connected || (s != null && s.contains(getPackageName()));
+    }
+
+    private boolean batteryOk() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    private boolean btOk() {
+        return Build.VERSION.SDK_INT < 31
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean installOk() {
+        return Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
+    }
+
+    private void refresh() {
+        boolean car = AutoService.carState != 0;
+        boolean net = AutoService.netStatus.startsWith("✅");
+
+        // 해야 할 일 목록
+        todoBox.removeAllViews();
+        int todo = 0;
+        if (!notiOk()) {
+            todo++;
+            addTodo("티맵 길안내 읽기 허용", "목록에서 '조아 HUD' 켜기",
+                    () -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
         }
-        refresh();
-        handler.post(poll);
-    }
-
-    @Override
-    protected void onPause() {
-        visible = false;
-        handler.removeCallbacks(poll);
-        super.onPause();
-    }
-
-    private void askBluetooth() {
-        if (Build.VERSION.SDK_INT >= 31
-                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, 3);
+        if (!a11yOk()) {
+            todo++;
+            addTodo("차량 화면 안내판 읽기 허용", "설치된 앱 → '조아 HUD 티맵 안내판 읽기' 켜기\n막히면: 앱 정보 → ⋮ → 제한된 설정 허용",
+                    () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         }
+        if (!overlayOk()) {
+            todo++;
+            addTodo("HUD 자동 실행 허용", "'다른 앱 위에 표시' 켜기",
+                    () -> startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + getPackageName()))));
+        }
+        if (!btOk()) {
+            todo++;
+            addTodo("블루투스 권한 허용", "차량 연결 감지에 필요",
+                    () -> requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, 3));
+        }
+        if (!batteryOk()) {
+            todo++;
+            addTodo("배터리 제한 해제", "꺼짐 방지 → '허용'",
+                    () -> {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                    Uri.parse("package:" + getPackageName())));
+                        } catch (Exception e) {
+                            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:" + getPackageName())));
+                        }
+                    });
+        }
+        if (!installOk()) {
+            todo++;
+            addTodo("자동 업데이트 설치 허용", "'이 출처 허용' 켜기",
+                    () -> startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName()))));
+        }
+
+        // 상태 카드
+        if (todo > 0) {
+            statusTitle.setText("⚠ 설정 " + todo + "개 남음");
+            statusTitle.setTextColor(Color.rgb(200, 90, 0));
+        } else if (car) {
+            statusTitle.setText("🚗 운행 중");
+            statusTitle.setTextColor(Color.rgb(30, 140, 70));
+        } else {
+            statusTitle.setText("✅ 준비 완료");
+            statusTitle.setTextColor(Color.rgb(30, 140, 70));
+        }
+        StringBuilder d = new StringBuilder();
+        d.append(car ? "차량 연결됨" : "시동 걸면 자동으로 HUD가 켜져요");
+        d.append("\n").append(net ? "인터넷 연결됨" : "인터넷 없음 — 메인폰 핫스팟에 연결하세요");
+        if (car && TmapA11yService.connected && !TmapA11yService.status.isEmpty()) {
+            d.append("\n").append(TmapA11yService.status);
+        }
+        statusDetail.setText(d.toString());
+
+        String up = Updater.lastMessage.isEmpty() ? "" : " · " + Updater.lastMessage;
+        versionLine.setText("v" + Updater.currentVersion(this) + up + "  (눌러서 업데이트 확인)");
+        if (logView != null && advanced.getVisibility() == View.VISIBLE) {
+            logView.setText(NavListenerService.logText());
+        }
+    }
+
+    private void addTodo(String title, String hint, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(16), dp(12), dp(16), dp(12));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(255, 243, 224));
+        bg.setCornerRadius(dp(12));
+        row.setBackground(bg);
+        TextView t = new TextView(this);
+        t.setText("👉 " + title);
+        t.setTextSize(17);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setTextColor(Color.rgb(120, 60, 0));
+        row.addView(t);
+        TextView h = new TextView(this);
+        h.setText(hint);
+        h.setTextSize(13);
+        h.setTextColor(Color.DKGRAY);
+        row.addView(h);
+        row.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(8);
+        todoBox.addView(row, lp);
+    }
+
+    // ───────── 고급 설정 ─────────
+
+    private void buildAdvanced() {
+        CheckBox autoMode = check("자동 모드 (시동 걸면 HUD 자동 실행)", "auto_mode", true);
+        autoMode.setOnCheckedChangeListener((c, on) -> {
+            p.edit().putBoolean("auto_mode", on).apply();
+            if (on) AutoService.start(this);
+            else stopService(new Intent(this, AutoService.class));
+        });
+        advanced.addView(autoMode);
+        advanced.addView(check("시동 끄면 HUD 자동 종료", "auto_close", true));
+        advanced.addView(check("자동 업데이트", "auto_update", true));
+        advanced.addView(check("안내판의 흰 글씨만 HUD 색으로", "white_only", true));
+
+        advanced.addView(sub("인터넷 받을 폰 (블루투스 테더링용, 핫스팟을 쓰면 필요 없음)"));
+        familyBox = new LinearLayout(this);
+        familyBox.setOrientation(LinearLayout.VERTICAL);
+        advanced.addView(familyBox);
+
+        Button test = button("테스트 신호 보내기");
+        test.setOnClickListener(v -> {
+            NavListenerService.sendTest(testStep++);
+            Toast.makeText(this, "보냄 — HUD 화면을 확인하세요", Toast.LENGTH_SHORT).show();
+        });
+        advanced.addView(test);
+
+        Button appInfo = button("앱 정보 열기 (제한된 설정 허용)");
+        appInfo.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()))));
+        advanced.addView(appInfo);
+
+        advanced.addView(sub("추가로 읽을 내비 앱 패키지명 (쉼표로 구분)"));
+        EditText extra = new EditText(this);
+        extra.setText(p.getString("extra_pkgs", ""));
+        extra.setHint("예: com.example.navi");
+        advanced.addView(extra);
+        CheckBox all = check("모든 앱 알림 기록 (패키지명 확인용)", "log_all", false);
+        advanced.addView(all);
+        Button save = button("저장");
+        save.setOnClickListener(v -> {
+            p.edit().putString("extra_pkgs", extra.getText().toString().trim()).apply();
+            Toast.makeText(this, "저장됨", Toast.LENGTH_SHORT).show();
+        });
+        advanced.addView(save);
+
+        advanced.addView(sub("기록 (문제가 있을 때 이 화면을 찍어 보내 주세요)"));
+        logView = new TextView(this);
+        logView.setTextSize(12);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+        advanced.addView(logView);
     }
 
     private void loadFamily() {
         familyBox.removeAllViews();
-        if (Build.VERSION.SDK_INT >= 31
-                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            familyBox.addView(note("(블루투스 권한을 허용해야 목록이 보입니다)"));
+        if (!btOk()) {
+            familyBox.addView(sub("(블루투스 권한이 필요합니다)"));
             return;
         }
         BluetoothManager bm = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
         BluetoothAdapter ad = bm != null ? bm.getAdapter() : null;
         if (ad == null || !ad.isEnabled()) {
-            familyBox.addView(note("(블루투스를 켜 주세요)"));
+            familyBox.addView(sub("(블루투스를 켜 주세요)"));
             return;
         }
         Set<String> fam = new HashSet<>(p.getStringSet("family", new HashSet<>()));
         for (BluetoothDevice d : ad.getBondedDevices()) {
             CheckBox cb = new CheckBox(this);
-            String name = d.getName() == null ? d.getAddress() : d.getName();
-            cb.setText(name);
+            cb.setText(d.getName() == null ? d.getAddress() : d.getName());
             cb.setChecked(fam.contains(d.getAddress()));
             final String addr = d.getAddress();
             cb.setOnCheckedChangeListener((c, on) -> {
@@ -440,53 +354,22 @@ public class MainActivity extends Activity {
             });
             familyBox.addView(cb);
         }
-        if (familyBox.getChildCount() == 0) familyBox.addView(note("(페어링된 기기가 없습니다)"));
     }
 
-    private void updateCapture() {
-        if (autoStatus != null) {
-            String car = AutoService.carState == 0 ? "차량 미연결" : "🚗 안드로이드 오토 연결됨";
-            autoStatus.setText((AutoService.running ? "🟢 자동 모드 동작 중 · " : "⚪ 자동 모드 꺼짐 · ")
-                    + car + (AutoService.netStatus.isEmpty() ? "" : " · " + AutoService.netStatus)
-                    + "\n⑥ 티맵 안내판 읽기: " + (TmapA11yService.connected ? "✅ 켜짐 " + TmapA11yService.status : "❌ 꺼짐"));
-        }
-        String s = CaptureService.running ? "🟢 " + CaptureService.status : "⚪ 화면 전송 꺼짐 " + CaptureService.status;
-        capStatus.setText(s);
-        cropView.invalidate();
-    }
+    // ───────── 수명주기 ─────────
 
-    private void refresh() {
-        boolean enabled = listenerEnabled();
-        status.setText(enabled ? "✅ 알림 접근 허용됨" : "❌ 알림 접근 꺼짐");
-        status.setTextColor(enabled ? Color.rgb(0, 140, 60) : Color.rgb(200, 40, 40));
-        logView.setText(NavListenerService.logText());
-        updateCapture();
-    }
-
-    private boolean listenerEnabled() {
-        String s = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
-        return s != null && s.contains(getPackageName());
-    }
-
-    private void startCapture() {
-        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE);
+    @Override
+    protected void onResume() {
+        super.onResume();
+        visible = true;
+        handler.post(poll);
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_CAPTURE) return;
-        if (resultCode != RESULT_OK || data == null) {
-            Toast.makeText(this, "화면 공유가 취소되었습니다", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        Intent i = new Intent(this, CaptureService.class)
-                .putExtra(CaptureService.EXTRA_CODE, resultCode)
-                .putExtra(CaptureService.EXTRA_DATA, data);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-        else startService(i);
-        Toast.makeText(this, "전송 시작 — 티맵을 열어 길안내를 켜세요", Toast.LENGTH_LONG).show();
+    protected void onPause() {
+        visible = false;
+        handler.removeCallbacks(poll);
+        super.onPause();
     }
 
     private void startHud() {
@@ -503,102 +386,27 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 1) startActivity(new Intent(this, HudActivity.class));
-        if (requestCode == 3) {
-            loadFamily();
-            if (p.getBoolean("auto_mode", false)) AutoService.start(this);
-        }
+        if (requestCode == 3 && p.getBoolean("auto_mode", true)) AutoService.start(this);
+        refresh();
     }
 
-    /** 마지막 티맵 화면 + 자를 영역(빨간 네모) */
-    private class CropPreview extends View {
-        private final Paint red = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint dim = new Paint();
-        private final Paint txt = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // ───────── UI 도우미 ─────────
 
-        CropPreview(Context c) {
-            super(c);
-            red.setStyle(Paint.Style.STROKE);
-            red.setStrokeWidth(dp(3));
-            red.setColor(Color.RED);
-            dim.setColor(Color.argb(150, 0, 0, 0));
-            txt.setColor(Color.WHITE);
-            txt.setTextSize(dp(14));
-            txt.setTextAlign(Paint.Align.CENTER);
-        }
-
-        @Override
-        protected void onDraw(Canvas c) {
-            int w = getWidth(), h = getHeight();
-            c.drawColor(Color.rgb(30, 30, 30));
-            Bitmap snap = CaptureService.snapshot;
-            float bw = editLand ? 16 : 9, bh = editLand ? 9 : 16;
-            if (snap != null && (snap.getWidth() > snap.getHeight()) == editLand) {
-                bw = snap.getWidth();
-                bh = snap.getHeight();
-            } else {
-                snap = null;
-            }
-            float sc = Math.min(w / bw, h / bh);
-            float fw = bw * sc, fh = bh * sc;
-            float left = (w - fw) / 2f, top = (h - fh) / 2f;
-            RectF area = new RectF(left, top, left + fw, top + fh);
-            if (snap != null) {
-                c.drawBitmap(snap, null, area, null);
-            } else {
-                c.drawText("전송 시작 후 티맵 화면을 띄웠다 오면", w / 2f, h / 2f - dp(10), txt);
-                c.drawText("여기에 그 화면이 보입니다", w / 2f, h / 2f + dp(12), txt);
-            }
-            float l = left + fw * cropVal(0) / 100f, t = top + fh * cropVal(1) / 100f;
-            float r = left + fw * cropVal(2) / 100f, b = top + fh * cropVal(3) / 100f;
-            // 영역 밖 어둡게
-            c.drawRect(left, top, left + fw, t, dim);
-            c.drawRect(left, b, left + fw, top + fh, dim);
-            c.drawRect(left, t, l, b, dim);
-            c.drawRect(r, t, left + fw, b, dim);
-            c.drawRect(l, t, r, b, red);
-        }
+    private CheckBox check(String label, String key, boolean def) {
+        CheckBox cb = new CheckBox(this);
+        cb.setText(label);
+        cb.setTextSize(15);
+        cb.setChecked(p.getBoolean(key, def));
+        cb.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean(key, on).apply());
+        return cb;
     }
 
-    private interface IntCb {
-        void on(int v);
-    }
-
-    private static class SimpleSeek implements SeekBar.OnSeekBarChangeListener {
-        private final IntCb cb;
-
-        SimpleSeek(IntCb cb) {
-            this.cb = cb;
-        }
-
-        @Override
-        public void onProgressChanged(SeekBar s, int v, boolean fromUser) {
-            if (fromUser) cb.on(v);
-        }
-
-        @Override
-        public void onStartTrackingTouch(SeekBar s) {
-        }
-
-        @Override
-        public void onStopTrackingTouch(SeekBar s) {
-        }
-    }
-
-    private TextView header(String s) {
+    private TextView sub(String s) {
         TextView t = new TextView(this);
         t.setText(s);
-        t.setTextSize(19);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setPadding(0, dp(20), 0, dp(6));
-        return t;
-    }
-
-    private TextView note(String s) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(14);
-        t.setTextColor(Color.DKGRAY);
-        t.setPadding(0, dp(2), 0, dp(4));
+        t.setTextSize(13);
+        t.setTextColor(Color.GRAY);
+        t.setPadding(0, dp(14), 0, dp(4));
         return t;
     }
 
@@ -606,8 +414,7 @@ public class MainActivity extends Activity {
         Button btn = new Button(this);
         btn.setText(s);
         btn.setAllCaps(false);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.topMargin = dp(4);
         btn.setLayoutParams(lp);
         return btn;
