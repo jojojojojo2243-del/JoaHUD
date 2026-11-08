@@ -8,9 +8,6 @@ import android.content.Intent;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent i) {
-        if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(i.getAction())) {
-            NavListenerService.log("업데이트 설치 완료 → v" + Updater.currentVersion(c));
-        }
         if (c.getSharedPreferences("hud", Context.MODE_PRIVATE).getBoolean("auto_mode", false)) {
             AutoService.start(c);
         }

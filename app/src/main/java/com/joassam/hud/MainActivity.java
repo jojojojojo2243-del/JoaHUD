@@ -44,12 +44,6 @@ public class MainActivity extends Activity {
     private SharedPreferences p;
     private TextView status, capStatus, logView, editMode, autoStatus;
     private LinearLayout familyBox;
-    private TextView updStatus;
-    private boolean updChecked = false;
-
-    private void showUpd(String m) {
-        if (updStatus != null) updStatus.setText("현재 버전 v" + Updater.currentVersion(this) + " · " + m);
-    }
     private CropPreview cropView;
     private final SeekBar[] crop = new SeekBar[4];
     private boolean editLand = false;
@@ -74,31 +68,6 @@ public class MainActivity extends Activity {
         int pad = dp(16);
         root.setPadding(pad, pad, pad, pad);
         sv.addView(root);
-
-        // ── 업데이트 ──
-        root.addView(header("🔄 앱 업데이트"));
-        updStatus = new TextView(this);
-        updStatus.setTextSize(15);
-        updStatus.setText("현재 버전 v" + Updater.currentVersion(this));
-        root.addView(updStatus);
-        CheckBox autoUpd = new CheckBox(this);
-        autoUpd.setText("자동 업데이트 (앱을 열 때 + 주차 중 6시간마다)");
-        autoUpd.setChecked(p.getBoolean("auto_update", true));
-        autoUpd.setOnCheckedChangeListener((c, on) -> p.edit().putBoolean("auto_update", on).apply());
-        root.addView(autoUpd);
-        LinearLayout urow = new LinearLayout(this);
-        Button chk = button("지금 업데이트");
-        chk.setOnClickListener(v -> Updater.check(this, true, this::showUpd));
-        Button perm2 = button("설치 권한 허용");
-        perm2.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT >= 26) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:" + getPackageName())));
-            }
-        });
-        urow.addView(chk, new LinearLayout.LayoutParams(0, -2, 1f));
-        urow.addView(perm2, new LinearLayout.LayoutParams(0, -2, 1f));
-        root.addView(urow);
 
         // ── 차량용 서브폰 자동 모드 ──
         root.addView(header("🚗 차량 자동 모드 (서브폰)"));
@@ -334,10 +303,6 @@ public class MainActivity extends Activity {
         setEditLand(false);
         loadFamily();
         if (p.getBoolean("auto_mode", false)) AutoService.start(this);
-        if (!updChecked) {
-            updChecked = true;
-            Updater.check(this, p.getBoolean("auto_update", true), this::showUpd);
-        }
 
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {

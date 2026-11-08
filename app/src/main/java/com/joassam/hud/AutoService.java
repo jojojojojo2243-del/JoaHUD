@@ -109,17 +109,8 @@ public class AutoService extends Service {
         return START_STICKY;
     }
 
-    private long lastUpdateCheck = 0;
-
     private void check() {
         int st = queryCarState();
-        // 주차 중(차량 미연결)이고 인터넷이 될 때 6시간마다 업데이트 확인·설치
-        long now = System.currentTimeMillis();
-        if (st == 0 && now - lastUpdateCheck > 6 * 3600_000L && hasInternet()
-                && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("auto_update", true)) {
-            lastUpdateCheck = now;
-            Updater.check(this, true, null);
-        }
         carState = st;
         boolean connected = st != 0;
         if (connected && !wasConnected) onCarConnected();
