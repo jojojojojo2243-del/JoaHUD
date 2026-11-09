@@ -234,7 +234,7 @@ public class TmapA11yService extends AccessibilityService {
             for (int x = 0; x < w; x += step) {
                 int v = b.getPixel(x, y);
                 int r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, bl = v & 0xff;
-                if (g > 60 && g > r + 25 && g > bl + 5) {
+                if (g > 45 && g > r + 18 && g >= bl) {
                     count++;
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -251,6 +251,56 @@ public class TmapA11yService extends AccessibilityService {
         r.right = Math.min(w, maxX + step);
         r.bottom = Math.min(h, maxY + step);
         return r;
+    }
+
+    /** 화면이 전부 검정(보안 차단)인지 */
+    private boolean isBlank(Bitmap b) {
+        int w = b.getWidth(), h = b.getHeight(), lit = 0, n = 0;
+        for (int y = 0; y < h; y += 8) for (int x = 0; x < w; x += 8) {
+            int v = b.getPixel(x, y);
+            n++;
+            if (((v >> 16) & 0xff) + ((v >> 8) & 0xff) + (v & 0xff) > 60) lit++;
+        }
+        return lit < n / 50;
+    }
+
+    private String colorInfo(Bitmap b) {
+        if (isBlank(b)) return "[화면이 검정 — 보안 차단 가능성]";
+        int v = b.getPixel(b.getWidth() / 6, b.getHeight() / 6);
+        return "[왼쪽위 색 " + ((v >> 16) & 0xff) + "," + ((v >> 8) & 0xff) + "," + (v & 0xff) + "]";
+    }
+
+    /** 티맵 안드로이드 오토 화면의 회전 카드 기본 위치 (왼쪽 위) */
+    private Rect fixedCard(Bitmap b) {
+        Rect r = new Rect();
+        r.left = (int) (b.getWidth() * 0.02f);
+        r.top = (int) (b.getHeight() * 0.03f);
+        r.right = (int) (b.getWidth() * 0.47f);
+        r.bottom = (int) (b.getHeight() * 0.46f);
+        return r;
+    }
+
+    private long lastDebugSave = 0;
+
+    /** 확인용: 캡처한 차량 화면을 사진첩(Pictures/JoaHUD)에 저장 (1분에 1번) */
+    private void saveDebug(Bitmap b) {
+        long now = System.currentTimeMillis();
+        if (now - lastDebugSave < 60000 || Build.VERSION.SDK_INT < 29) return;
+        lastDebugSave = now;
+        try {
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "joahud_car_" + now + ".png");
+            cv.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png");
+            cv.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/JoaHUD");
+            android.net.Uri u = getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            if (u == null) return;
+            try (java.io.OutputStream o = getContentResolver().openOutputStream(u)) {
+                b.compress(Bitmap.CompressFormat.PNG, 100, o);
+            }
+            NavListenerService.log("확인용 차량 화면 사진 저장: 갤러리 → JoaHUD 앨범");
+        } catch (Throwable t) {
+            NavListenerService.log("확인용 사진 저장 실패: " + t.getMessage());
+        }
     }
 
     private volatile long lastAaShot = 0;
@@ -276,6 +326,12 @@ public class TmapA11yService extends AccessibilityService {
                             if (hw != null) {
                                 Bitmap full = hw.copy(Bitmap.Config.ARGB_8888, false);
                                 Rect area = r != null ? r : findGuideCard(full);
+                                String how = "자동";
+                                if (area == null && !isBlank(full)) {
+                                    // 초록 카드를 못 찾으면 티맵 안내 카드 기본 위치(왼쪽 위)를 사용
+                                    area = fixedCard(full);
+                                    how = "기본 위치";
+                                }
                                 if (area != null) {
                                     Bitmap crop = process(full, area);
                                     if (crop != null) {
@@ -290,7 +346,9 @@ public class TmapA11yService extends AccessibilityService {
                                     shotLogged = true;
                                     lastShotLog = System.currentTimeMillis();
                                     NavListenerService.log("차량 화면 캡처 성공 " + full.getWidth() + "x" + full.getHeight()
-                                            + (area != null ? " 카드 " + area.left + "," + area.top + "~" + area.right + "," + area.bottom : " 카드 못 찾음"));
+                                            + " " + colorInfo(full)
+                                            + (area != null ? " 카드(" + how + ") " + area.left + "," + area.top + "~" + area.right + "," + area.bottom : " 카드 못 찾음"));
+                                    saveDebug(full);
                                 }
                                 full.recycle();
                             }
