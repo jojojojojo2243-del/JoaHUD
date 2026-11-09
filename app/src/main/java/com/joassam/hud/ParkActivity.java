@@ -59,8 +59,8 @@ public class ParkActivity extends Activity {
         @Override
         public void run() {
             step++;
-            int dx = ((step % 5) - 2) * dp(10);
-            int dy = (((step / 5) % 5) - 2) * dp(10);
+            int dx = ((step % 5) - 2) * dp(4);
+            int dy = (((step / 5) % 5) - 2) * dp(4);
             box.setTranslationX(dx);
             box.setTranslationY(dy);
             handler.postDelayed(this, 60_000L);
@@ -94,29 +94,34 @@ public class ParkActivity extends Activity {
         box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
+        box.setPadding(dp(16), dp(20), dp(16), dp(20));
 
         TextView t1 = new TextView(this);
         t1.setText(msg);
         t1.setTextColor(0xFFDDDDDD);
-        t1.setTextSize(26);
+        t1.setTextSize(22);
         t1.setGravity(Gravity.CENTER);
-        box.addView(t1);
+        box.addView(t1, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView t2 = new TextView(this);
-        t2.setText(phone);
-        t2.setTextColor(Color.WHITE);
-        t2.setTypeface(Typeface.DEFAULT_BOLD);
-        t2.setGravity(Gravity.CENTER);
-        t2.setSingleLine(true);
-        t2.setAutoSizeTextTypeUniformWithConfiguration(24, 140, 2, android.util.TypedValue.COMPLEX_UNIT_SP);
-        box.addView(t2, new LinearLayout.LayoutParams(-1, dp(160)));
+        // 번호를 "010 / 3527 / 9288" 세 줄로 나누고, 줄마다 화면에 맞춰 최대한 크게
+        for (String part : splitPhone(phone)) {
+            TextView t = new TextView(this);
+            t.setText(part);
+            t.setTextColor(Color.WHITE);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setGravity(Gravity.CENTER);
+            t.setSingleLine(true);
+            t.setIncludeFontPadding(false);
+            t.setAutoSizeTextTypeUniformWithConfiguration(16, 400, 2, android.util.TypedValue.COMPLEX_UNIT_SP);
+            box.addView(t, new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
 
         TextView t3 = new TextView(this);
         t3.setText("(화면을 두 번 누르면 닫힘)");
         t3.setTextColor(0xFF555555);
         t3.setTextSize(12);
         t3.setGravity(Gravity.CENTER);
-        box.addView(t3);
+        box.addView(t3, new LinearLayout.LayoutParams(-1, -2));
 
         root.addView(box, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
@@ -146,6 +151,26 @@ public class ParkActivity extends Activity {
         } catch (Exception ignored) {
         }
         handler.removeCallbacks(shift);
+    }
+
+    /** 010-3527-9288 / 01035279288 / 010 3527 9288 → [010, 3527, 9288] */
+    static java.util.List<String> splitPhone(String phone) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        String p = phone == null ? "" : phone.trim();
+        for (String s : p.split("[-\\s.]+")) if (!s.isEmpty()) out.add(s);
+        if (out.size() == 1) {
+            String d = out.get(0);
+            out.clear();
+            if (d.matches("\\d{11}")) {
+                out.add(d.substring(0, 3)); out.add(d.substring(3, 7)); out.add(d.substring(7));
+            } else if (d.matches("\\d{10}")) {
+                out.add(d.substring(0, 3)); out.add(d.substring(3, 6)); out.add(d.substring(6));
+            } else {
+                out.add(d);
+            }
+        }
+        if (out.isEmpty()) out.add("번호를 입력하세요");
+        return out;
     }
 
     private int dp(int v) {

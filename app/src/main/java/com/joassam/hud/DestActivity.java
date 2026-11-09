@@ -105,7 +105,23 @@ public class DestActivity extends Activity {
         row.addView(goBtn);
         root.addView(row);
 
+        List<String[]> favs = favorites(p);
+        if (!favs.isEmpty()) {
+            TextView ft = new TextView(this);
+            ft.setText("자주 가는 곳");
+            ft.setTextColor(0xFFAAAAAA);
+            ft.setTextSize(14);
+            ft.setPadding(0, dp(18), 0, dp(4));
+            root.addView(ft);
+            for (String[] f : favs) {
+                Button fb = big("⭐ " + f[0], 0xFF24476B);
+                fb.setOnClickListener(v -> go(f[0]));
+                root.addView(fb);
+            }
+        }
+
         List<String> recent = recent();
+        for (String[] f : favs) recent.remove(f[0]);
         if (!recent.isEmpty()) {
             TextView rt = new TextView(this);
             rt.setText("최근 목적지");
@@ -192,10 +208,12 @@ public class DestActivity extends Activity {
         }
         handler.removeCallbacks(idle);
         saveRecent(dest);
-        status.setText("🔎 '" + dest + "' 찾는 중…");
+        // "집", "농장"처럼 저장한 이름이면 그 주소로
+        final String addr = favAddress(p, dest);
+        status.setText("🔎 '" + dest + "'" + (addr.equals(dest) ? "" : " (" + addr + ")") + " 찾는 중…");
         new Thread(() -> {
-            double[] ll = geocode(dest);
-            runOnUiThread(() -> openTmap(dest, ll));
+            double[] ll = geocode(addr);
+            runOnUiThread(() -> openTmap(addr.equals(dest) ? dest : addr, dest, ll));
         }).start();
     }
 
@@ -212,11 +230,11 @@ public class DestActivity extends Activity {
         return null;
     }
 
-    private void openTmap(String dest, double[] ll) {
+    private void openTmap(String dest, String label, double[] ll) {
         NavListenerService.destFlowAt = System.currentTimeMillis();
         String enc = Uri.encode(dest);
         List<String> urls = new ArrayList<>();
-        if (ll != null) urls.add("tmap://route?rGoName=" + enc + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
+        if (ll != null) urls.add("tmap://route?rGoName=" + Uri.encode(label) + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
         urls.add("tmap://search?name=" + enc);
         for (String u : urls) {
             try {
@@ -244,6 +262,33 @@ public class DestActivity extends Activity {
     private void openHudOnly() {
         startActivity(new Intent(this, HudActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         finish();
+    }
+
+    /** 자주 가는 곳: 한 줄에 "이름=주소" */
+    static List<String[]> favorites(SharedPreferences p) {
+        List<String[]> out = new ArrayList<>();
+        for (String line : p.getString("favs", "").split("\n")) {
+            int i = line.indexOf('=');
+            if (i <= 0) continue;
+            String n = line.substring(0, i).trim(), a = line.substring(i + 1).trim();
+            if (!n.isEmpty() && !a.isEmpty()) out.add(new String[]{n, a});
+        }
+        return out;
+    }
+
+    /** 말한 내용에 저장된 이름이 들어 있으면 그 주소 (가장 긴 이름 우선) */
+    static String favAddress(SharedPreferences p, String said) {
+        String s = said.replace(" ", "");
+        String best = null;
+        int bestLen = 0;
+        for (String[] f : favorites(p)) {
+            String n = f[0].replace(" ", "");
+            if ((s.equals(n) || s.contains(n)) && n.length() > bestLen) {
+                best = f[1];
+                bestLen = n.length();
+            }
+        }
+        return best != null ? best : said;
     }
 
     private List<String> recent() {

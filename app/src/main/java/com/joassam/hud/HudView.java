@@ -394,6 +394,7 @@ public class HudView extends View {
     /** 공공데이터 경고: 단속카메라(거리) · 제한속도 · 어린이보호구역 */
     private void drawPublicAlert(Canvas c, int w, int h, boolean landscape, boolean guiding) {
         // 티맵 공식 연동 정보가 있으면 그쪽을 그대로 씀
+        drawSectionAvg(c, w, h, landscape);
         if (guiding && (nav.limit > 0 || nav.sdiDist > 0)) return;
         Alerts.Hit a = Alerts.now();
         if (a == null) return;
@@ -424,7 +425,7 @@ public class HudView extends View {
         nav.limit = keepLimit;
         nav.sdiDist = keepDist;
         if (temp) nav = null;
-        if (a.school || a.section) {
+        if ((a.school || a.section) && Alerts.sectionAvg() < 0) {
             String label = a.school ? "어린이보호구역" : "구간단속";
             text.setTextSize(labS);
             text.setTextAlign(Paint.Align.CENTER);
@@ -436,6 +437,30 @@ public class HudView extends View {
             text.setColor(Color.BLACK);
             c.drawText(label, labX, labY, text);
         }
+    }
+
+    /** 구간단속 중: "구간 평균 72" (제한속도 넘으면 빨간색) */
+    private void drawSectionAvg(Canvas c, int w, int h, boolean landscape) {
+        int avg = Alerts.sectionAvg();
+        if (avg < 0) return;
+        int lim = Alerts.sectionLimit;
+        boolean over = lim > 0 && avg > lim;
+        float cx, cy, ts;
+        if (landscape) {
+            cx = w * 0.80f; cy = h * 0.86f; ts = h * 0.085f;
+        } else {
+            cx = w / 2f; cy = h * 0.555f; ts = w * 0.065f;
+        }
+        String s = "구간 평균 " + avg + (lim > 0 ? " / " + lim : "");
+        text.setTextSize(ts);
+        text.setTextAlign(Paint.Align.CENTER);
+        float tw = text.measureText(s);
+        Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bg.setColor(over ? Color.rgb(200, 20, 20) : Color.rgb(40, 40, 40));
+        c.drawRoundRect(new RectF(cx - tw / 2f - ts * 0.4f, cy - ts * 1.05f, cx + tw / 2f + ts * 0.4f, cy + ts * 0.35f),
+                ts * 0.3f, ts * 0.3f, bg);
+        text.setColor(over ? Color.WHITE : Color.rgb(255, 170, 60));
+        c.drawText(s, cx, cy, text);
     }
 
     /** 제한속도 표지판 (빨간 테두리 원) */

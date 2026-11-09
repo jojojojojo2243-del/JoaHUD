@@ -63,6 +63,37 @@ public final class Alerts {
     private static int lockIdx = -1;
     private static float lockDist = 0;
 
+    // ───────── 구간단속 평균속도 ─────────
+    static volatile boolean inSection = false;
+    static volatile int sectionLimit = 0;
+    private static long secStart = 0;
+    private static double secDist = 0;      // m
+    private static int secStartIdx = -1;
+
+    /** 구간단속 중 평균속도(km/h), 구간 밖이면 -1 */
+    static int sectionAvg() {
+        if (!inSection) return -1;
+        double sec = (System.currentTimeMillis() - secStart) / 1000.0;
+        if (sec < 5) return -1;
+        return (int) Math.round(secDist / sec * 3.6);
+    }
+
+    /** 카메라를 지나쳤을 때: 구간단속 시작/끝 판단 */
+    private static void passed(int idx) {
+        if ((flags[idx] & F_SECTION) == 0) return;
+        if (!inSection) {
+            inSection = true;
+            secStart = System.currentTimeMillis();
+            secDist = 0;
+            secStartIdx = idx;
+            sectionLimit = limit[idx];
+            NavListenerService.log("구간단속 시작 (제한 " + sectionLimit + ")");
+        } else if (idx != secStartIdx && secDist > 500) {
+            NavListenerService.log("구간단속 끝 — 평균 " + sectionAvg() + "km/h");
+            inSection = false;
+        }
+    }
+
     // ───────── 자료 불러오기 ─────────
 
     static synchronized void load(Context c) {
@@ -269,6 +300,13 @@ public final class Alerts {
             Location.distanceBetween(lastLat, lastLon, la, lo, r);
             if (r[0] > 8) heading = r[1] < 0 ? r[1] + 360 : r[1];
         }
+        if (hasLast && inSection) {
+            float[] dd = new float[1];
+            Location.distanceBetween(lastLat, lastLon, la, lo, dd);
+            if (dd[0] < 200) secDist += dd[0]; // GPS 튐 무시
+            // 구간 끝을 못 찾은 경우 안전장치: 30km 또는 40분
+            if (secDist > 30000 || System.currentTimeMillis() - secStart > 40 * 60_000L) inSection = false;
+        }
         lastLat = la;
         lastLon = lo;
         hasLast = true;
@@ -280,6 +318,7 @@ public final class Alerts {
             float d = res[0];
             float diff = angle(heading, res[1]);
             if (d < 40 || (d > lockDist + 30 && diff > 90) || d > 1000) {
+                if (lockDist < 150 && d <= 1000) passed(lockIdx); // 실제로 카메라 옆을 지나감
                 lockIdx = -1; // 지나침
             } else {
                 lockDist = Math.min(lockDist, d);

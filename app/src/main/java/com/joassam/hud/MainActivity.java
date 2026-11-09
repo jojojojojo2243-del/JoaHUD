@@ -113,6 +113,22 @@ public class MainActivity extends Activity {
         versionLine.setOnClickListener(v -> Updater.check(this, true, m -> refresh()));
         root.addView(versionLine);
 
+        // 업데이트 버튼 (GitHub 최신 버전 바로 확인·설치)
+        Button upd = new Button(this);
+        upd.setAllCaps(false);
+        upd.setText("🔄  업데이트 확인");
+        upd.setTextSize(16);
+        upd.setOnClickListener(v -> {
+            Toast.makeText(this, "최신 버전 확인 중…", Toast.LENGTH_SHORT).show();
+            Updater.check(this, true, m -> {
+                Toast.makeText(this, m, Toast.LENGTH_LONG).show();
+                refresh();
+            });
+        });
+        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(-1, -2);
+        ul.topMargin = dp(6);
+        root.addView(upd, ul);
+
         // ── 5. 고급 설정 (접힘) ──
         advToggle = new Button(this);
         advToggle.setAllCaps(false);
@@ -271,7 +287,7 @@ public class MainActivity extends Activity {
         statusDetail.setText(d.toString());
 
         String up = Updater.lastMessage.isEmpty() ? "" : " · " + Updater.lastMessage;
-        versionLine.setText("v" + Updater.currentVersion(this) + up + "  (눌러서 업데이트 확인)");
+        versionLine.setText("현재 v" + Updater.currentVersion(this) + up);
         if (logView != null && advanced.getVisibility() == View.VISIBLE) {
             logView.setText(NavListenerService.logText());
         }
@@ -352,6 +368,7 @@ public class MainActivity extends Activity {
         advanced.addView(autoMode);
         advanced.addView(check("시동 끄면 HUD 자동 종료", "auto_close", true));
         advanced.addView(check("자동 업데이트", "auto_update", true));
+        advanced.addView(check("티맵 미니 창 검게 가리기 (안드로이드 14 이상, 앞유리에 안 비침)", "hide_mini", true));
         advanced.addView(check("HUD 밝기: 폰 자동 밝기 따르기 (끄면 항상 최대)", "auto_bright", true));
         Button pubBtn = button("단속카메라 공공데이터 키 입력/변경");
         pubBtn.setOnClickListener(v -> askPubKey());
@@ -382,6 +399,20 @@ public class MainActivity extends Activity {
             ssidBtn.setText(carSsidLabel());
         });
         advanced.addView(ssidBtn);
+
+        advanced.addView(sub("⭐ 자주 가는 곳 — 한 줄에 '이름=주소' (예: 집=충남 공주시 계룡면 ○○길 12)"));
+        EditText favs = new EditText(this);
+        favs.setHint("집=주소\n농장=주소\n하레하레=대전 ...");
+        favs.setText(p.getString("favs", ""));
+        favs.setMinLines(3);
+        favs.setSingleLine(false);
+        advanced.addView(favs);
+        Button favSave = button("자주 가는 곳 저장");
+        favSave.setOnClickListener(v -> {
+            p.edit().putString("favs", favs.getText().toString().trim()).apply();
+            Toast.makeText(this, DestActivity.favorites(p).size() + "곳 저장됨 — '집'처럼 이름만 말하면 바로 안내", Toast.LENGTH_LONG).show();
+        });
+        advanced.addView(favSave);
 
         advanced.addView(sub("🅿 주차 때 보여줄 전화번호"));
         EditText phone = new EditText(this);

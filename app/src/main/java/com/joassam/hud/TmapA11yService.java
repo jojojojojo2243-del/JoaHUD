@@ -95,13 +95,18 @@ public class TmapA11yService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        hideCover();
         connected = false;
         handler.removeCallbacks(loop);
         super.onDestroy();
     }
 
     private void tick() {
-        if (!HudActivity.visible || busy) return;
+        if (!HudActivity.visible) {
+            hideCover();
+            return;
+        }
+        if (busy) return;
         if (Build.VERSION.SDK_INT < 30) {
             status = "안드로이드 11 이상 필요";
             return;
@@ -110,6 +115,7 @@ public class TmapA11yService extends AccessibilityService {
         if (scanAndroidAuto()) return;
         // 2순위: 폰 화면 위 티맵 미니 안내판
         final Rect r = findTmapWidget();
+        if (r == null) hideCover();
         if (r == null) {
             status = "티맵 미니 안내 창을 찾는 중 (서브폰 티맵 길안내 → 홈 버튼)";
             long now = System.currentTimeMillis();
@@ -123,6 +129,61 @@ public class TmapA11yService extends AccessibilityService {
             widgetLogged = true;
             NavListenerService.log("티맵 미니 안내 창 찾음 " + r.left + "," + r.top + "~" + r.right + "," + r.bottom + " → HUD에 표시");
         }
+        // 안드로이드 14 이상: 티맵 미니 창만 따로 찍고, 화면에서는 검은 덮개로 가림
+        //  → 앞유리에 거꾸로 된 작은 창이 비치지 않음
+        if (Build.VERSION.SDK_INT >= 34 && widgetId >= 0 && !windowShotFailed
+                && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("hide_mini", true)) {
+            busy = true;
+            showCover(r);
+            try {
+                takeScreenshotOfWindow(widgetId, getMainExecutor(), new TakeScreenshotCallback() {
+                    @Override
+                    public void onSuccess(ScreenshotResult res) {
+                        work.execute(() -> {
+                            try {
+                                HardwareBuffer hb = res.getHardwareBuffer();
+                                Bitmap hw = Bitmap.wrapHardwareBuffer(hb, res.getColorSpace());
+                                if (hw != null) {
+                                    Bitmap full = hw.copy(Bitmap.Config.ARGB_8888, false);
+                                    Rect all = new Rect();
+                                    all.left = 0;
+                                    all.top = 0;
+                                    all.right = full.getWidth();
+                                    all.bottom = full.getHeight();
+                                    Bitmap crop = process(full, all);
+                                    full.recycle();
+                                    if (crop != null) {
+                                        UdpSender.sendBytes(jpeg(crop));
+                                        status = "티맵 안내판 표시 중 (미니 창 숨김)";
+                                    }
+                                }
+                                hb.close();
+                            } catch (Throwable t) {
+                                status = "처리 오류: " + t.getMessage();
+                            } finally {
+                                busy = false;
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onFailure(int code) {
+                        busy = false;
+                        if (code == 3) return; // 간격 짧음
+                        windowShotFailed = true;
+                        hideCover();
+                        NavListenerService.log("미니 창 따로 찍기 불가(코드 " + code + ") → 기존 방식(미니 창 보임)");
+                    }
+                });
+            } catch (Throwable t) {
+                busy = false;
+                windowShotFailed = true;
+                hideCover();
+                NavListenerService.log("미니 창 따로 찍기 오류: " + t.getMessage());
+            }
+            return;
+        }
+        hideCover();
         busy = true;
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
@@ -446,6 +507,50 @@ public class TmapA11yService extends AccessibilityService {
         return b.append("]").toString();
     }
 
+    private int widgetId = -1;
+    private volatile boolean windowShotFailed = false;
+    private android.view.View cover;
+    private final Rect coverRect = new Rect();
+
+    /** 티맵 미니 창 위에 검은 덮개 (터치는 그대로 통과) */
+    private void showCover(Rect r) {
+        try {
+            android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
+            android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams(
+                    r.width(), r.height(),
+                    android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    android.graphics.PixelFormat.OPAQUE);
+            lp.gravity = android.view.Gravity.TOP | android.view.Gravity.LEFT;
+            lp.x = r.left;
+            lp.y = r.top;
+            if (cover == null) {
+                cover = new android.view.View(this);
+                cover.setBackgroundColor(android.graphics.Color.BLACK);
+                wm.addView(cover, lp);
+            } else if (!r.equals(coverRect)) {
+                wm.updateViewLayout(cover, lp);
+            }
+            coverRect.set(r);
+        } catch (Throwable t) {
+            windowShotFailed = true;
+            cover = null;
+            NavListenerService.log("미니 창 덮개 오류: " + t.getMessage());
+        }
+    }
+
+    private void hideCover() {
+        if (cover == null) return;
+        try {
+            ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).removeView(cover);
+        } catch (Throwable ignored) {
+        }
+        cover = null;
+        coverRect.setEmpty();
+    }
+
     /** 티맵 패키지의 작은 창(미니 안내) 위치 */
     private Rect findTmapWidget() {
         try {
@@ -460,7 +565,10 @@ public class TmapA11yService extends AccessibilityService {
                 Rect b = new Rect();
                 w.getBoundsInScreen(b);
                 long area = (long) b.width() * b.height();
-                if (area > 0 && area < screen / 2) return b;
+                if (area > 0 && area < screen / 2) {
+                    widgetId = w.getId();
+                    return b;
+                }
             }
         } catch (Throwable ignored) {
         }
@@ -486,8 +594,31 @@ public class TmapA11yService extends AccessibilityService {
             int w = c.getWidth(), h = c.getHeight();
             int[] px = new int[w * h];
             c.getPixels(px, 0, w, 0, 0, w, h);
+            // 빨간 테두리 표지판(카메라·제한속도)을 찾아서 그 원 안은 티맵 원래 색 그대로 둠
+            int rx0 = w, ry0 = h, rx1 = -1, ry1 = -1, reds = 0;
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int v = px[y * w + x];
+                    int rr = (v >> 16) & 0xff, gg = (v >> 8) & 0xff, bb = v & 0xff;
+                    if (rr > 150 && gg < 110 && bb < 110 && rr > gg + 70) {
+                        reds++;
+                        if (x < rx0) rx0 = x;
+                        if (x > rx1) rx1 = x;
+                        if (y < ry0) ry0 = y;
+                        if (y > ry1) ry1 = y;
+                    }
+                }
+            }
+            boolean sign = reds > 25 && rx1 - rx0 > 8 && ry1 - ry0 > 8
+                    && (rx1 - rx0) < w * 0.6f && (ry1 - ry0) < h * 0.9f;
+            float scx = (rx0 + rx1) / 2f, scy = (ry0 + ry1) / 2f;
+            float sr = Math.max(rx1 - rx0, ry1 - ry0) / 2f + 2f;
             for (int i = 0; i < px.length; i++) {
                 int v = px[i];
+                if (sign) {
+                    float dx = (i % w) - scx, dy = (i / w) - scy;
+                    if (dx * dx + dy * dy <= sr * sr) continue; // 표지판 원 안: 원래 색 유지
+                }
                 int rr = (v >> 16) & 0xff, gg = (v >> 8) & 0xff, bb = v & 0xff;
                 int min = Math.min(rr, Math.min(gg, bb));
                 // 초록 바탕은 빨강 성분이 낮음 → 빨강·초록이 모두 밝으면 글씨/화살표(흰색·연회색)
