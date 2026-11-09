@@ -107,10 +107,12 @@ public class HudView extends View {
         // ── 가로 화면: 순정 HUD 스타일 (왼쪽 회전안내 · 가운데 큰 속도 · 위 시계) ──
         if (landscape) {
             drawLandscapeHud(c, w, h, guiding, stale, hasFrame);
+            drawPublicAlert(c, w, h, true, guiding);
             return;
         }
         if (!landscape) {
             drawPortraitHud(c, w, h, guiding, stale, hasFrame);
+            drawPublicAlert(c, w, h, false, guiding);
             return;
         }
 
@@ -177,15 +179,15 @@ public class HudView extends View {
             c.drawText(remainText(), pad, pad + h * 0.08f, text);
         }
 
-        float splitX = w * 0.46f;          // 왼쪽 안내 영역 끝
-        float speedCx = w * 0.70f;         // 속도 가운데
-        float speedSize = Math.min(h * 0.42f * speedScale / 1.8f, h * 0.62f);
-        float speedBase = h * 0.60f;
+        float splitX = w * 0.60f;          // 왼쪽 안내 영역 끝 (안내판 크게)
+        float speedCx = w * 0.80f;         // 속도 가운데
+        float speedSize = Math.min(h * 0.36f * speedScale / 1.8f, h * 0.50f);
+        float speedBase = h * 0.56f;       // 오른쪽 아래 구석은 티맵 미니 창 자리로 비움
 
         if (hasFrame) {
             // 차량 화면에서 잘라온 안내 카드를 왼쪽에
-            float top0 = h * 0.20f, bottom0 = h * 0.88f;
-            float availW = splitX - pad * 1.5f, availH = bottom0 - top0;
+            float top0 = h * 0.08f, bottom0 = h * 0.96f;
+            float availW = splitX - pad * 1.2f, availH = bottom0 - top0;
             float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
             float fw = frame.getWidth() * sc, fh = frame.getHeight() * sc;
             float left = pad, top = top0 + (availH - fh) / 2f;
@@ -241,17 +243,17 @@ public class HudView extends View {
 
         // 가운데 큰 속도
         text.setTextAlign(Paint.Align.CENTER);
-        text.setColor(Color.WHITE);
+        text.setColor(speedColor());
         text.setTextSize(speedSize);
         String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
         c.drawText(v, speedCx, speedBase + speedSize * 0.35f, text);
 
         // 단속·위험 안내 문구가 있으면 오른쪽에 주황 삼각형 경고
-        if (guiding && nav.limit > 0) drawLimit(c, w * 0.90f, h * 0.36f, h * 0.12f);
-        if (guiding && nav.sdiDist > 0) drawCamera(c, w * 0.90f, h * 0.70f, h * 0.20f);
+        if (guiding && nav.limit > 0) drawLimit(c, w * 0.66f, h * 0.24f, h * 0.10f);
+        if (guiding && nav.sdiDist > 0) drawCamera(c, w * 0.66f, h * 0.56f, h * 0.17f);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
         if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
-            float tx = w * 0.90f, ty = h * 0.55f, ts = h * 0.30f;
+            float tx = w * 0.66f, ty = h * 0.45f, ts = h * 0.22f;
             Path tri = new Path();
             tri.moveTo(tx, ty - ts * 0.55f);
             tri.lineTo(tx + ts * 0.55f, ty + ts * 0.45f);
@@ -267,10 +269,10 @@ public class HudView extends View {
         }
 
         // 속도 아래: 목적지
-        if (guiding && nav.sub != null && !nav.sub.isEmpty()) {
+        if (guiding && !hasFrame && nav.sub != null && !nav.sub.isEmpty()) {
             text.setColor(Color.LTGRAY);
             text.setTextAlign(Paint.Align.CENTER);
-            fitText(c, "◉ " + nav.sub, speedCx, h * 0.90f, w - splitX - pad, h * 0.075f);
+            fitText(c, "◉ " + nav.sub, speedCx, h * 0.72f, w - splitX - pad, h * 0.07f);
         }
     }
 
@@ -300,7 +302,7 @@ public class HudView extends View {
 
         // ── 위: 회전 안내 ──
         if (hasFrame) {
-            float top0 = h * 0.09f, bottom0 = h * 0.36f;
+            float top0 = h * 0.09f, bottom0 = h * 0.52f;
             float availW = w - 2 * pad, availH = bottom0 - top0;
             float sc = Math.min(availW / frame.getWidth(), availH / frame.getHeight());
             float fw = frame.getWidth() * sc, fh = frame.getHeight() * sc;
@@ -322,42 +324,11 @@ public class HudView extends View {
             c.drawText(lastRecv == 0 ? "신호 기다리는 중" : (stale ? "신호 끊김" : "길안내 없음"), cx, h * 0.22f, text);
         }
 
-        // ── 가운데: 차로 그래픽 (원근감 있는 두 줄 + 내 차) ──
-        Paint lane = new Paint(Paint.ANTI_ALIAS_FLAG);
-        lane.setStyle(Paint.Style.STROKE);
-        lane.setStrokeCap(Paint.Cap.ROUND);
-        lane.setStrokeWidth(w * 0.018f);
-        float topY = h * 0.42f, botY = h * 0.66f;
-        float topHalf = w * 0.08f, botHalf = w * 0.36f;
-        lane.setColor(Color.argb(200, 255, 255, 255));
-        c.drawLine(cx - topHalf, topY, cx - botHalf, botY, lane);
-        c.drawLine(cx + topHalf, topY, cx + botHalf, botY, lane);
-        // 앞차 거리 막대 느낌의 하늘색 띠
-        Paint band = new Paint(Paint.ANTI_ALIAS_FLAG);
-        band.setColor(Color.argb(150, 120, 200, 255));
-        Path bp = new Path();
-        float by0 = topY + (botY - topY) * 0.10f, by1 = topY + (botY - topY) * 0.28f;
-        float bh0 = topHalf + (botHalf - topHalf) * 0.10f - w * 0.02f, bh1 = topHalf + (botHalf - topHalf) * 0.28f - w * 0.02f;
-        bp.moveTo(cx - bh0, by0);
-        bp.lineTo(cx + bh0, by0);
-        bp.lineTo(cx + bh1, by1);
-        bp.lineTo(cx - bh1, by1);
-        bp.close();
-        c.drawPath(bp, band);
-        // 내 차 (반원)
-        Paint car = new Paint(Paint.ANTI_ALIAS_FLAG);
-        car.setStyle(Paint.Style.STROKE);
-        car.setStrokeWidth(w * 0.02f);
-        car.setColor(color);
-        float carR = w * 0.09f, carY = botY - h * 0.01f;
-        c.drawArc(new RectF(cx - carR, carY - carR, cx + carR, carY + carR), 180, 180, false, car);
-        c.drawArc(new RectF(cx - carR * 0.6f, carY - carR * 0.6f, cx + carR * 0.6f, carY + carR * 0.6f), 180, 180, false, car);
-
         // ── 아래: 큰 속도 ──
         float sp = Math.min(w * 0.24f * speedScale / 1.8f + w * 0.06f, w * 0.38f);
-        float sy = h * 0.80f;
+        float sy = h * 0.70f;              // 아래 구석은 티맵 미니 창 자리로 비움
         text.setTextAlign(Paint.Align.CENTER);
-        text.setColor(Color.WHITE);
+        text.setColor(speedColor());
         text.setTextSize(sp);
         String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
         c.drawText(v, cx, sy, text);
@@ -365,14 +336,6 @@ public class HudView extends View {
         text.setTextSize(sp * 0.22f);
         text.setTextAlign(Paint.Align.LEFT);
         c.drawText("km/h", cx + vw / 2f + sp * 0.05f, sy, text);
-
-        // 왼쪽: 길안내 중 표시(초록 아이콘)
-        if (guiding) {
-            Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
-            g.setColor(Color.rgb(60, 200, 90));
-            float gx = pad, gy = sy - sp * 0.45f, gs = w * 0.09f;
-            c.drawRoundRect(new RectF(gx, gy, gx + gs, gy + gs * 0.7f), gs * 0.15f, gs * 0.15f, g);
-        }
 
         // 오른쪽: 단속·위험 경고 삼각형
         if (guiding && nav.limit > 0) drawLimit(c, w - pad - w * 0.08f, sy - sp * 0.35f, w * 0.08f);
@@ -398,7 +361,7 @@ public class HudView extends View {
         if (guiding && nav.sub != null && !nav.sub.isEmpty()) {
             text.setColor(Color.LTGRAY);
             text.setTextAlign(Paint.Align.CENTER);
-            fitText(c, "◉ " + nav.sub, cx, h * 0.90f, w - 2 * pad, w * 0.05f);
+            if (!hasFrame) fitText(c, "◉ " + nav.sub, cx, h * 0.78f, w - 2 * pad, w * 0.05f);
         }
     }
 
@@ -410,6 +373,69 @@ public class HudView extends View {
         String dist = nav.remainDist >= 1000
                 ? String.format(Locale.KOREA, "%.1fkm", nav.remainDist / 1000f) : nav.remainDist + "m";
         return time + "   " + dist;
+    }
+
+    /** 지금 적용되는 제한속도 (티맵 공식 연동 → 공공데이터 순) */
+    private int effLimit() {
+        if (nav != null && nav.active && nav.limit > 0 && System.currentTimeMillis() - lastRecv < 6000) return nav.limit;
+        Alerts.Hit a = Alerts.now();
+        return a != null ? a.limit : 0;
+    }
+
+    /** 제한속도를 넘으면 속도 숫자를 빨갛게 깜빡임 */
+    private int speedColor() {
+        int lim = effLimit();
+        if (lim > 0 && speed > lim + 2) {
+            return (System.currentTimeMillis() / 400) % 2 == 0 ? Color.rgb(255, 40, 40) : Color.rgb(255, 150, 150);
+        }
+        return Color.WHITE;
+    }
+
+    /** 공공데이터 경고: 단속카메라(거리) · 제한속도 · 어린이보호구역 */
+    private void drawPublicAlert(Canvas c, int w, int h, boolean landscape, boolean guiding) {
+        // 티맵 공식 연동 정보가 있으면 그쪽을 그대로 씀
+        if (guiding && (nav.limit > 0 || nav.sdiDist > 0)) return;
+        Alerts.Hit a = Alerts.now();
+        if (a == null) return;
+        float limX, limY, limR, camX, camY, camS, labX, labY, labS;
+        if (landscape) {
+            limX = w * 0.66f; limY = h * 0.24f; limR = h * 0.10f;
+            camX = w * 0.66f; camY = h * 0.56f; camS = h * 0.17f;
+            labX = w * 0.80f; labY = h * 0.72f; labS = h * 0.075f;
+        } else {
+            float sp = Math.min(w * 0.24f * speedScale / 1.8f + w * 0.06f, w * 0.38f);
+            float sy = h * 0.70f, pad = w * 0.05f;
+            limX = w - pad - w * 0.08f; limY = sy - sp * 0.35f; limR = w * 0.08f;
+            camX = pad + w * 0.10f; camY = sy - sp * 0.35f; camS = w * 0.13f;
+            labX = w / 2f; labY = h * 0.59f; labS = w * 0.06f;
+        }
+        int keepLimit = 0, keepDist = 0;
+        boolean temp = nav == null;
+        if (!temp) {
+            keepLimit = nav.limit;
+            keepDist = nav.sdiDist;
+        } else {
+            nav = new NavData();
+        }
+        nav.limit = a.limit;
+        nav.sdiDist = a.dist;
+        if (a.limit > 0) drawLimit(c, limX, limY, limR);
+        drawCamera(c, camX, camY, camS);
+        nav.limit = keepLimit;
+        nav.sdiDist = keepDist;
+        if (temp) nav = null;
+        if (a.school || a.section) {
+            String label = a.school ? "어린이보호구역" : "구간단속";
+            text.setTextSize(labS);
+            text.setTextAlign(Paint.Align.CENTER);
+            float tw = text.measureText(label);
+            Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+            bg.setColor(a.school ? Color.rgb(255, 200, 0) : Color.rgb(255, 140, 0));
+            c.drawRoundRect(new RectF(labX - tw / 2f - labS * 0.4f, labY - labS * 1.05f,
+                    labX + tw / 2f + labS * 0.4f, labY + labS * 0.35f), labS * 0.3f, labS * 0.3f, bg);
+            text.setColor(Color.BLACK);
+            c.drawText(label, labX, labY, text);
+        }
     }
 
     /** 제한속도 표지판 (빨간 테두리 원) */
@@ -451,7 +477,7 @@ public class HudView extends View {
 
     private void drawSpeed(Canvas c, float cx, float baseline, float size, boolean big) {
         text.setTextAlign(Paint.Align.CENTER);
-        text.setColor(big ? color : Color.WHITE);
+        text.setColor(big ? color : speedColor());
         text.setTextSize(size);
         String v = speed < 0 ? "--" : String.valueOf(Math.round(speed));
         c.drawText(v, cx, baseline, text);

@@ -469,8 +469,10 @@ public class TmapA11yService extends AccessibilityService {
 
     /** 안내판만 잘라서 흰색(화살표·숫자)만 남기고 나머지는 검정, 흰색은 HUD 색으로 */
     private Bitmap process(Bitmap full, Rect r) {
-        int x0 = Math.max(0, r.left), y0 = Math.max(0, r.top);
-        int x1 = Math.min(full.getWidth(), r.right), y1 = Math.min(full.getHeight(), r.bottom);
+        // 미니 안내 창의 테두리(흰 선)가 같이 잘리지 않게 가장자리를 조금 안쪽으로
+        int ix = Math.max(2, r.width() * 3 / 100), iy = Math.max(2, r.height() * 4 / 100);
+        int x0 = Math.max(0, r.left + ix), y0 = Math.max(0, r.top + iy);
+        int x1 = Math.min(full.getWidth(), r.right - ix), y1 = Math.min(full.getHeight(), r.bottom - iy);
         if (x1 - x0 < 8 || y1 - y0 < 8) return null;
         Bitmap c = Bitmap.createBitmap(full, x0, y0, x1 - x0, y1 - y0);
         if (c.getWidth() > 720) {
@@ -479,7 +481,7 @@ public class TmapA11yService extends AccessibilityService {
             c = s;
         }
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
-        if (p.getBoolean("white_only", true)) {
+        if (p.getBoolean("white_only", false)) {
             int color = HudActivity.COLORS[p.getInt("color", 0) % HudActivity.COLORS.length];
             int w = c.getWidth(), h = c.getHeight();
             int[] px = new int[w * h];
@@ -488,7 +490,8 @@ public class TmapA11yService extends AccessibilityService {
                 int v = px[i];
                 int rr = (v >> 16) & 0xff, gg = (v >> 8) & 0xff, bb = v & 0xff;
                 int min = Math.min(rr, Math.min(gg, bb));
-                px[i] = min > 170 ? color : 0xff000000;
+                // 초록 바탕은 빨강 성분이 낮음 → 빨강·초록이 모두 밝으면 글씨/화살표(흰색·연회색)
+                px[i] = (rr > 105 && gg > 105) || min > 140 ? color : 0xff000000;
             }
             Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             out.setPixels(px, 0, w, 0, 0, w, h);

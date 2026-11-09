@@ -69,6 +69,10 @@ public class HudActivity extends Activity {
         public void onLocationChanged(Location loc) {
             hud.setSpeed(loc.hasSpeed() ? loc.getSpeed() * 3.6f : 0f);
             RouteGuide.onLocation(loc);
+            try {
+                Alerts.onLocation(HudActivity.this, loc);
+            } catch (Throwable ignored) {
+            }
         }
 
         @Override
@@ -97,7 +101,9 @@ public class HudActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         WindowManager.LayoutParams lp = getWindow().getAttributes();
-        lp.screenBrightness = 1f;
+        // 폰 자동 밝기를 따름 (끄면 항상 최대 밝기)
+        lp.screenBrightness = getSharedPreferences("hud", MODE_PRIVATE).getBoolean("auto_bright", true)
+                ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : 1f;
         getWindow().setAttributes(lp);
 
         FrameLayout root = new FrameLayout(this);

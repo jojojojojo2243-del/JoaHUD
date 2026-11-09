@@ -120,15 +120,19 @@ public class NavListenerService extends NotificationListenerService {
     }
 
     private long lastAutoOpen = 0;
+    /** 목적지 화면에서 티맵을 연 시각 (이때는 티맵 화면이 앞에 있어도 바로 HUD로 전환) */
+    static volatile long destFlowAt = 0;
 
     /** 서브폰 티맵 단독 모드: 티맵 길안내 중 홈으로 나가면 HUD를 자동으로 띄움 */
     private void autoOpenHud(String pkg, SharedPreferences p) {
         if (!p.getBoolean("tmap_auto_hud", true)) return;
         if (!pkg.equals(TmapA11yService.TMAP)) return;
-        if (HudActivity.visible || MainActivity.visible) return;
-        if (TmapA11yService.TMAP.equals(TmapA11yService.fgPkg)) return; // 티맵 화면을 보고 있는 중
+        if (HudActivity.visible || MainActivity.visible || DestActivity.visible) return;
         long now = System.currentTimeMillis();
-        if (now - lastAutoOpen < 60000) return;
+        boolean fromDest = now - destFlowAt < 5 * 60_000L;
+        if (!fromDest && TmapA11yService.TMAP.equals(TmapA11yService.fgPkg)) return; // 티맵 화면을 보고 있는 중
+        if (!fromDest && now - lastAutoOpen < 60000) return;
+        if (fromDest) destFlowAt = 0;
         lastAutoOpen = now;
         try {
             if (android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)) return;

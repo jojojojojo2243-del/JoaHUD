@@ -65,6 +65,96 @@ public class AutoService extends Service {
         }
     };
 
+    // ───────── 시동 감지 (서브폰 충전 시작/끊김) ─────────
+    static volatile boolean ignOn = false;
+    private long lastPowerOn = 0;
+
+    private final BroadcastReceiver powerReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            if (Intent.ACTION_POWER_CONNECTED.equals(i.getAction())) {
+                lastPowerOn = System.currentTimeMillis();
+                // 메인폰 핫스팟이 붙을 시간을 조금 기다렸다가 판단
+                handler.postDelayed(AutoService.this::onPowerOn, 8000);
+            } else if (Intent.ACTION_POWER_DISCONNECTED.equals(i.getAction())) {
+                onPowerOff();
+            }
+        }
+    };
+
+    private void onPowerOn() {
+        ParkActivity.closeIfOpen();
+        SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        if (queryCarState() != 0) return;          // 안드로이드 오토 방식이면 기존 흐름 사용
+        if (!isCharging()) return;                 // 8초 사이에 빠졌으면 무시
+        String ssid = p.getString("car_ssid", "");
+        if (!ssid.isEmpty()) {
+            String now = currentSsid();
+            if (!ssid.equals(now)) {
+                NavListenerService.log("충전 시작 — 차 와이파이(" + ssid + ") 아님(" + now + ") → 시동으로 안 봄");
+                return;
+            }
+        }
+        ignOn = true;
+        NavListenerService.log("🔑 시동 켜짐(충전 시작)");
+        updateNoti("🚗 운행 중");
+        if (HudActivity.visible || DestActivity.visible) return;
+        Intent i;
+        if (p.getBoolean("ign_dest", true)) i = new Intent(this, DestActivity.class);
+        else i = new Intent(this, HudActivity.class);
+        startFromBackground(i);
+    }
+
+    private void onPowerOff() {
+        if (!ignOn) return;
+        ignOn = false;
+        NavListenerService.log("🔑 시동 꺼짐(충전 끊김)");
+        updateNoti("대기 중 — 시동을 기다립니다");
+        showPark();
+    }
+
+    private void showPark() {
+        SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
+        if (p.getBoolean("park_show", true) && !p.getString("park_phone", "").isEmpty()) {
+            handler.postDelayed(() -> startFromBackground(new Intent(this, ParkActivity.class)), 1500);
+        }
+    }
+
+    private boolean isCharging() {
+        Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        return b != null && b.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0;
+    }
+
+    @SuppressWarnings("deprecation")
+    static String currentSsid(Context c) {
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) c.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            String s = wm.getConnectionInfo().getSSID();
+            if (s == null || s.contains("unknown ssid")) return "";
+            return s.replace("\"", "");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String currentSsid() {
+        return currentSsid(this);
+    }
+
+    private void startFromBackground(Intent i) {
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        try {
+            if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
+                NavListenerService.log("'다른 앱 위에 표시' 권한이 없어 화면을 못 띄움");
+                return;
+            }
+            startActivity(i);
+        } catch (Exception e) {
+            NavListenerService.log("화면 띄우기 실패: " + e.getMessage());
+        }
+    }
+
     private final Runnable poll = new Runnable() {
         @Override
         public void run() {
@@ -104,6 +194,9 @@ public class AutoService extends Service {
             f.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(carReceiver, f, Context.RECEIVER_EXPORTED);
             else registerReceiver(carReceiver, f);
+            IntentFilter pf = new IntentFilter(Intent.ACTION_POWER_CONNECTED);
+            pf.addAction(Intent.ACTION_POWER_DISCONNECTED);
+            registerReceiver(powerReceiver, pf);
             initPan();
             handler.post(poll);
         }
@@ -118,11 +211,13 @@ public class AutoService extends Service {
         // 주차 중(차량 미연결)이고 인터넷이 될 때 15분마다 업데이트 확인·설치
         // (운전 중에는 HUD가 꺼지지 않도록 설치하지 않음)
         long now = System.currentTimeMillis();
-        if (st == 0 && now - lastUpdateCheck > 15 * 60_000L && hasInternet()
+        if (st == 0 && !ignOn && now - lastUpdateCheck > 15 * 60_000L && hasInternet()
                 && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("auto_update", true)) {
             lastUpdateCheck = now;
             Updater.check(this, true, null);
         }
+        // 단속카메라 공공데이터: 주차 중 인터넷 되면 일주일마다 자동 업데이트
+        if (st == 0 && !ignOn && hasInternet()) Alerts.maybeUpdate(this);
         carState = st;
         boolean connected = st != 0;
         if (connected && !wasConnected) onCarConnected();
@@ -168,6 +263,8 @@ public class AutoService extends Service {
         NavListenerService.log("안드로이드 오토 해제됨");
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
+        ignOn = false;
+        showPark();
         // 시동 끄면 1분 뒤 바로 업데이트 확인
         lastUpdateCheck = System.currentTimeMillis() - 14 * 60_000L;
     }
@@ -338,6 +435,10 @@ public class AutoService extends Service {
         handler.removeCallbacksAndMessages(null);
         try {
             unregisterReceiver(carReceiver);
+        } catch (Exception ignored) {
+        }
+        try {
+            unregisterReceiver(powerReceiver);
         } catch (Exception ignored) {
         }
         super.onDestroy();

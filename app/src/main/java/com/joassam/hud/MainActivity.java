@@ -224,11 +224,19 @@ public class MainActivity extends Activity {
                         }
                     });
         }
-        if (RouteGuide.key(this).isEmpty()) {
+        if (Alerts.key(this).isEmpty()) {
             todo++;
-            addTodo("티맵 화살표 켜기 (TMAP API 키 입력)",
-                    "티맵 공식 연동으로 회전·제한속도·카메라를 받습니다. 눌러서 키 입력",
-                    this::askKey);
+            addTodo("단속카메라·스쿨존 경고 켜기 (공공데이터 키, 무료)",
+                    "공공데이터포털 가입 → 단속카메라 데이터 '활용신청'(자동 승인) → 인증키 붙여넣기",
+                    this::askPubKey);
+        }
+        if (p.getString("park_phone", "").isEmpty() && p.getBoolean("park_show", true)) {
+            todo++;
+            addTodo("주차 전화번호 입력", "시동 끄면 서브폰에 크게 보여 줄 번호 — 고급 설정 ▸ 🅿 에서 입력",
+                    () -> {
+                        advanced.setVisibility(View.VISIBLE);
+                        Toast.makeText(this, "아래 '🅿 주차 때 보여줄 전화번호'에 입력 후 저장", Toast.LENGTH_LONG).show();
+                    });
         }
         if (!installOk()) {
             todo++;
@@ -249,11 +257,15 @@ public class MainActivity extends Activity {
             statusTitle.setTextColor(Color.rgb(30, 140, 70));
         }
         StringBuilder d = new StringBuilder();
-        d.append(car ? "차량 연결됨" : "시동 걸면 자동으로 HUD가 켜져요");
+        d.append(car || AutoService.ignOn ? "운행 중" : "시동 걸면(충전 시작) '어디로 갈까요?' → 티맵 → HUD");
         d.append("\n").append(net ? "인터넷 연결됨" : "인터넷 없음 — 메인폰 핫스팟에 연결하세요");
         if (!RouteGuide.key(this).isEmpty()) d.append("\n티맵 공식 연동: ").append(TmapEdc.getState());
         if (!TmapEdc.ok() && !RouteGuide.status.isEmpty()) d.append("\n화살표(보조): ").append(RouteGuide.status);
-        if (car && TmapA11yService.connected && !TmapA11yService.status.isEmpty()) {
+        if (!Alerts.key(this).isEmpty()) {
+            Alerts.load(this);
+            d.append("\n경고 자료: ").append(Alerts.status);
+        }
+        if ((car || AutoService.ignOn) && TmapA11yService.connected && !TmapA11yService.status.isEmpty()) {
             d.append("\n").append(TmapA11yService.status);
         }
         statusDetail.setText(d.toString());
@@ -263,6 +275,26 @@ public class MainActivity extends Activity {
         if (logView != null && advanced.getVisibility() == View.VISIBLE) {
             logView.setText(NavListenerService.logText());
         }
+    }
+
+    private void askPubKey() {
+        EditText in = new EditText(this);
+        in.setHint("공공데이터 인증키(Decoding 또는 Encoding) 붙여넣기");
+        in.setText(Alerts.key(this));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("단속카메라 경고 (공공데이터)")
+                .setMessage("1. data.go.kr 회원가입\n2. '전국무인교통단속카메라표준데이터' 페이지에서 [활용신청] (자동 승인, 무료)\n3. 마이페이지 → 개발계정 → 일반 인증키 복사\n4. 여기에 붙여넣고 저장\n\n저장하면 바로 전국 자료를 받고(1~2분), 이후 일주일마다 자동 업데이트돼요.")
+                .setView(in)
+                .setPositiveButton("저장", (dlg, w) -> {
+                    p.edit().putString("pub_key", in.getText().toString().trim()).putLong("pub_updated", 0).apply();
+                    Alerts.update(this);
+                    Toast.makeText(this, "단속카메라 자료 받는 중… (1~2분)", Toast.LENGTH_LONG).show();
+                    refresh();
+                })
+                .setNeutralButton("신청 페이지 열기", (dlg, w) ->
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.data.go.kr/data/15028200/standard.do"))))
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     private void askKey() {
@@ -320,7 +352,62 @@ public class MainActivity extends Activity {
         advanced.addView(autoMode);
         advanced.addView(check("시동 끄면 HUD 자동 종료", "auto_close", true));
         advanced.addView(check("자동 업데이트", "auto_update", true));
-        advanced.addView(check("안내판의 흰 글씨만 HUD 색으로", "white_only", true));
+        advanced.addView(check("HUD 밝기: 폰 자동 밝기 따르기 (끄면 항상 최대)", "auto_bright", true));
+        Button pubBtn = button("단속카메라 공공데이터 키 입력/변경");
+        pubBtn.setOnClickListener(v -> askPubKey());
+        advanced.addView(pubBtn);
+        Button pubNow = button("단속카메라 자료 지금 새로 받기");
+        pubNow.setOnClickListener(v -> {
+            Alerts.update(this);
+            Toast.makeText(this, "받는 중… 상태 카드에서 확인하세요", Toast.LENGTH_SHORT).show();
+        });
+        advanced.addView(pubNow);
+
+        advanced.addView(sub("🔑 시동 연동 (서브폰 충전이 시작되면 시동 켜짐으로 봄)"));
+        advanced.addView(check("시동 켜면 '어디로 갈까요?' 화면 (음성/주소 입력)", "ign_dest", true));
+        advanced.addView(check("목적지 화면에서 바로 음성 듣기", "dest_voice", true));
+        advanced.addView(check("시동 끄면 주차 전화번호 화면", "park_show", true));
+        Button ssidBtn = button(carSsidLabel());
+        ssidBtn.setOnClickListener(v -> {
+            String cur = AutoService.currentSsid(this);
+            if (!p.getString("car_ssid", "").isEmpty()) {
+                p.edit().remove("car_ssid").apply();
+                Toast.makeText(this, "해제됨 — 충전만 시작돼도 시동으로 봅니다", Toast.LENGTH_LONG).show();
+            } else if (cur.isEmpty()) {
+                Toast.makeText(this, "지금 연결된 와이파이를 못 읽었어요 (위치 켜기 + 메인폰 핫스팟 연결 후 다시)", Toast.LENGTH_LONG).show();
+            } else {
+                p.edit().putString("car_ssid", cur).apply();
+                Toast.makeText(this, "'" + cur + "'에 연결된 채 충전될 때만 시동으로 봅니다", Toast.LENGTH_LONG).show();
+            }
+            ssidBtn.setText(carSsidLabel());
+        });
+        advanced.addView(ssidBtn);
+
+        advanced.addView(sub("🅿 주차 때 보여줄 전화번호"));
+        EditText phone = new EditText(this);
+        phone.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
+        phone.setHint("예: 010-1234-5678");
+        phone.setText(p.getString("park_phone", ""));
+        advanced.addView(phone);
+        EditText msg = new EditText(this);
+        msg.setHint("위에 보일 문구 (기본: 주차 중 연락처)");
+        msg.setText(p.getString("park_msg", ""));
+        advanced.addView(msg);
+        Button phoneSave = button("전화번호 저장");
+        phoneSave.setOnClickListener(v -> {
+            String m = msg.getText().toString().trim();
+            p.edit().putString("park_phone", phone.getText().toString().trim())
+                    .putString("park_msg", m.isEmpty() ? "주차 중 연락처" : m).apply();
+            Toast.makeText(this, "저장됨", Toast.LENGTH_SHORT).show();
+        });
+        advanced.addView(phoneSave);
+        Button parkTest = button("주차 화면 미리보기");
+        parkTest.setOnClickListener(v -> startActivity(new Intent(this, ParkActivity.class)));
+        advanced.addView(parkTest);
+        Button destTest = button("목적지 화면 미리보기");
+        destTest.setOnClickListener(v -> startActivity(new Intent(this, DestActivity.class)));
+        advanced.addView(destTest);
+        advanced.addView(check("안내판을 HUD 한 가지 색으로 (끄면 티맵 원래 색 그대로)", "white_only", false));
 
         advanced.addView(sub("인터넷 받을 폰 (블루투스 테더링용, 핫스팟을 쓰면 필요 없음)"));
         familyBox = new LinearLayout(this);
@@ -432,6 +519,11 @@ public class MainActivity extends Activity {
         if (requestCode == 1) startActivity(new Intent(this, HudActivity.class));
         if (requestCode == 3 && p.getBoolean("auto_mode", true)) AutoService.start(this);
         refresh();
+    }
+
+    private String carSsidLabel() {
+        String s = p.getString("car_ssid", "");
+        return s.isEmpty() ? "차 와이파이 등록 (지금 연결된 메인폰 핫스팟 = 차 안)" : "차 와이파이: " + s + " (눌러서 해제)";
     }
 
     // ───────── UI 도우미 ─────────
