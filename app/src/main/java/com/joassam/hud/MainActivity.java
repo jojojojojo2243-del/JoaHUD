@@ -271,7 +271,7 @@ public class MainActivity extends Activity {
         in.setText(RouteGuide.key(this));
         new android.app.AlertDialog.Builder(this)
                 .setTitle("티맵 API 키")
-                .setMessage("openapi.sk.com 가입 → 앱 만들기(appKey 발급) → TMAP API 상품 구매에서 Premium 요금제 선택 → appKey를 붙여넣으세요")
+                .setMessage("openapi.sk.com 가입 → 앱 만들기(appKey 발급) → TMAP 상품에서 무료(Free) 요금제 신청 → appKey를 붙여넣으세요 (화살표는 무료로 충분)")
                 .setView(in)
                 .setPositiveButton("저장", (dlg, w) -> {
                     p.edit().putString("tmap_key", in.getText().toString().trim()).apply();

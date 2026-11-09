@@ -56,6 +56,37 @@ public class TmapA11yService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        try {
+            if (event != null && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    && event.getPackageName() != null) {
+                String pk = event.getPackageName().toString();
+                // 키보드·시스템UI·티맵 미니 안내 같은 작은 창은 '앞 화면'으로 치지 않음
+                if (!pk.equals("com.android.systemui") && !pk.contains("inputmethod") && !pk.contains("honeyboard")) {
+                    if (!(pk.equals(TMAP) && findTmapWidget() != null && !tmapFull())) fgPkg = pk;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 지금 맨 앞에 떠 있는 앱 (티맵 화면을 보고 있는지 확인용) */
+    static volatile String fgPkg = "";
+
+    /** 티맵 본 화면이 전체 화면으로 떠 있는지 */
+    private boolean tmapFull() {
+        try {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            long screen = (long) dm.widthPixels * dm.heightPixels;
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
+                Rect b = new Rect();
+                w.getBoundsInScreen(b);
+                if ((long) b.width() * b.height() >= screen / 2) return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     @Override
@@ -80,8 +111,17 @@ public class TmapA11yService extends AccessibilityService {
         // 2순위: 폰 화면 위 티맵 미니 안내판
         final Rect r = findTmapWidget();
         if (r == null) {
-            status = "티맵 안내를 찾는 중 (차량 화면/미니 안내 모두 없음)";
+            status = "티맵 미니 안내 창을 찾는 중 (서브폰 티맵 길안내 → 홈 버튼)";
+            long now = System.currentTimeMillis();
+            if (now - lastWidgetLog > 60000) {
+                lastWidgetLog = now;
+                NavListenerService.log("서브폰 화면에서 티맵 미니 안내 창 없음 " + windowDiag());
+            }
             return;
+        }
+        if (!widgetLogged) {
+            widgetLogged = true;
+            NavListenerService.log("티맵 미니 안내 창 찾음 " + r.left + "," + r.top + "~" + r.right + "," + r.bottom + " → HUD에 표시");
         }
         busy = true;
         try {
@@ -339,6 +379,11 @@ public class TmapA11yService extends AccessibilityService {
                                         lastAaData = System.currentTimeMillis();
                                         status = "차량 화면 안내 카드 표시 중";
                                     }
+                                } else if (isBlank(full)) {
+                                    // 이 폰은 차량 화면을 검게 막음 → 10분 동안 캡처 중지(배터리 절약)
+                                    aaShotFailed = true;
+                                    failedAt = System.currentTimeMillis() + 9 * 60000L;
+                                    status = "차량 화면 캡처가 보안으로 막힘 — 서브폰 티맵 단독 모드를 쓰세요";
                                 } else {
                                     status = "차량 화면에서 초록 안내 카드 없음 (길안내 중인지 확인)";
                                 }
@@ -380,6 +425,25 @@ public class TmapA11yService extends AccessibilityService {
             aaShotFailed = true;
             failedAt = System.currentTimeMillis();
         }
+    }
+
+    private long lastWidgetLog = 0;
+    private boolean widgetLogged = false;
+
+    /** 진단: 지금 폰 화면에 떠 있는 창 목록 */
+    private String windowDiag() {
+        StringBuilder b = new StringBuilder("[창: ");
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                Rect r = new Rect();
+                w.getBoundsInScreen(r);
+                b.append(root != null && root.getPackageName() != null ? root.getPackageName() : "?")
+                        .append(' ').append(r.width()).append('x').append(r.height()).append(", ");
+            }
+        } catch (Throwable ignored) {
+        }
+        return b.append("]").toString();
     }
 
     /** 티맵 패키지의 작은 창(미니 안내) 위치 */
