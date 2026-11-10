@@ -35,11 +35,10 @@ final class FavImport {
 
     static List<String[]> parse(byte[] data, String fileName) throws Exception {
         // 옛 엑셀(.xls) 파일은 못 읽음 → 안내
-        if (data.length > 8 && (data[0] & 0xff) == 0xD0 && (data[1] & 0xff) == 0xCF && (data[2] & 0xff) == 0x11 && (data[3] & 0xff) == 0xE0) {
-            throw new Exception("옛 엑셀(.xls) 파일이에요. 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(.xlsx)'로 저장한 뒤 불러와 주세요");
-        }
+        boolean ole = data.length > 8 && (data[0] & 0xff) == 0xD0 && (data[1] & 0xff) == 0xCF && (data[2] & 0xff) == 0x11 && (data[3] & 0xff) == 0xE0;
         boolean zip = data.length > 4 && data[0] == 'P' && data[1] == 'K';
-        List<String[]> rows = zip ? xlsx(data) : csv(data);
+        List<String[]> rows = ole ? xls(data) : zip ? xlsx(data) : csv(data);
+        zip = zip || ole;
         List<String[]> out = new ArrayList<>();
         int bad = 0;
         for (String[] r : rows) for (String v : r) if (v != null && broken(v)) bad++;
@@ -72,6 +71,211 @@ final class FavImport {
             b.append(e.getKey()).append('=').append(e.getValue());
         }
         return b.toString();
+    }
+
+    // ───────── 옛 엑셀 .xls (BIFF8) ─────────
+    private static int u16(byte[] b, int o) {
+        return (b[o] & 0xff) | (b[o + 1] & 0xff) << 8;
+    }
+
+    private static int i32(byte[] b, int o) {
+        return (b[o] & 0xff) | (b[o + 1] & 0xff) << 8 | (b[o + 2] & 0xff) << 16 | (b[o + 3] & 0xff) << 24;
+    }
+
+    /** OLE 묶음 파일에서 "Workbook" 내용 꺼내기 */
+    private static byte[] oleStream(byte[] f, String want1, String want2) throws Exception {
+        int secSize = 1 << u16(f, 0x1E);
+        int miniSize = 1 << u16(f, 0x20);
+        int nFat = i32(f, 0x2C);
+        int dirStart = i32(f, 0x30);
+        int cutoff = i32(f, 0x38);
+        int miniFatStart = i32(f, 0x3C);
+        int difatStart = i32(f, 0x44);
+        // FAT 섹터 목록
+        List<Integer> fatSecs = new ArrayList<>();
+        for (int i = 0; i < 109 && fatSecs.size() < nFat; i++) fatSecs.add(i32(f, 0x4C + i * 4));
+        int dif = difatStart;
+        while (fatSecs.size() < nFat && dif >= 0 && dif != -2) {
+            int off = 512 + dif * secSize;
+            for (int i = 0; i < secSize / 4 - 1 && fatSecs.size() < nFat; i++) fatSecs.add(i32(f, off + i * 4));
+            dif = i32(f, off + secSize - 4);
+        }
+        int per = secSize / 4;
+        int[] fat = new int[fatSecs.size() * per];
+        for (int i = 0; i < fatSecs.size(); i++) {
+            int off = 512 + fatSecs.get(i) * secSize;
+            for (int j = 0; j < per; j++) fat[i * per + j] = i32(f, off + j * 4);
+        }
+        byte[] dir = chain(f, fat, dirStart, secSize, -1);
+        byte[] rootStream = null;
+        int[] miniFat = null;
+        for (int e = 0; e + 128 <= dir.length; e += 128) {
+            int nameLen = u16(dir, e + 0x40);
+            if (nameLen < 2) continue;
+            String name = new String(dir, e, nameLen - 2, StandardCharsets.UTF_16LE);
+            int type = dir[e + 0x42];
+            int start = i32(dir, e + 0x74);
+            int size = i32(dir, e + 0x78);
+            if (type == 5) { // 루트: 작은 조각들 저장소
+                rootStream = chain(f, fat, start, secSize, size);
+                byte[] mf = miniFatStart >= 0 ? chain(f, fat, miniFatStart, secSize, -1) : new byte[0];
+                miniFat = new int[mf.length / 4];
+                for (int i = 0; i < miniFat.length; i++) miniFat[i] = i32(mf, i * 4);
+            } else if (type == 2 && (name.equals(want1) || name.equals(want2))) {
+                if (size >= cutoff || rootStream == null) return chain(f, fat, start, secSize, size);
+                return chain(rootStream, miniFat, start, miniSize, size, true);
+            }
+        }
+        throw new Exception("엑셀 내용을 찾지 못했어요");
+    }
+
+    private static byte[] chain(byte[] f, int[] fat, int start, int secSize, int size) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        int s = start, guard = 0;
+        while (s >= 0 && s < fat.length && guard++ < 1_000_000) {
+            int off = 512 + s * secSize;
+            if (off + secSize > f.length) break;
+            o.write(f, off, secSize);
+            s = fat[s];
+        }
+        byte[] r = o.toByteArray();
+        return size >= 0 && size < r.length ? java.util.Arrays.copyOf(r, size) : r;
+    }
+
+    private static byte[] chain(byte[] mini, int[] miniFat, int start, int secSize, int size, boolean isMini) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        int s = start, guard = 0;
+        while (s >= 0 && s < miniFat.length && guard++ < 1_000_000) {
+            int off = s * secSize;
+            if (off + secSize > mini.length) break;
+            o.write(mini, off, secSize);
+            s = miniFat[s];
+        }
+        byte[] r = o.toByteArray();
+        return size >= 0 && size < r.length ? java.util.Arrays.copyOf(r, size) : r;
+    }
+
+    /** 레코드 여러 개에 걸친 글자를 읽는 도우미 (CONTINUE 경계 처리) */
+    private static final class Blocks {
+        final List<byte[]> blocks;
+        int bi = 0, pos = 0;
+
+        Blocks(List<byte[]> b) {
+            blocks = b;
+        }
+
+        boolean more() {
+            while (bi < blocks.size() && pos >= blocks.get(bi).length) {
+                bi++;
+                pos = 0;
+            }
+            return bi < blocks.size();
+        }
+
+        int u8() {
+            more();
+            return blocks.get(bi)[pos++] & 0xff;
+        }
+
+        int u16() {
+            return u8() | u8() << 8;
+        }
+
+        int i32() {
+            return u16() | u16() << 16;
+        }
+
+        void skip(int n) {
+            for (int i = 0; i < n && more(); i++) pos++;
+        }
+
+        String chars(int cch, boolean high) {
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < cch; i++) {
+                if (bi < blocks.size() && pos >= blocks.get(bi).length) {
+                    // 글자 중간에 레코드가 바뀌면 새 레코드 첫 바이트가 글자 크기 표시
+                    bi++;
+                    pos = 0;
+                    if (bi >= blocks.size()) break;
+                    high = (blocks.get(bi)[pos++] & 1) != 0;
+                }
+                if (bi >= blocks.size()) break;
+                if (high) b.append((char) u16());
+                else b.append((char) u8());
+            }
+            return b.toString();
+        }
+
+        String xlString() {
+            int cch = u16();
+            int g = u8();
+            boolean high = (g & 1) != 0;
+            int runs = (g & 8) != 0 ? u16() : 0;
+            int ext = (g & 4) != 0 ? i32() : 0;
+            String s = chars(cch, high);
+            skip(runs * 4 + ext);
+            return s;
+        }
+    }
+
+    private static List<String[]> xls(byte[] data) throws Exception {
+        byte[] wb = oleStream(data, "Workbook", "Book");
+        List<String> sst = new ArrayList<>();
+        java.util.TreeMap<Integer, String[]> rows = new java.util.TreeMap<>();
+        int p = 0;
+        boolean inSheet = false;
+        while (p + 4 <= wb.length) {
+            int id = u16(wb, p), len = u16(wb, p + 2);
+            int d = p + 4;
+            if (d + len > wb.length) break;
+            if (id == 0x0809) { // BOF
+                int dt = u16(wb, d + 2);
+                if (dt == 0x0010) inSheet = true;
+            } else if (id == 0x000A) { // EOF
+                if (inSheet) break; // 첫 번째 시트만
+            } else if (id == 0x00FC) { // SST (+ 뒤따르는 CONTINUE)
+                List<byte[]> bl = new ArrayList<>();
+                bl.add(java.util.Arrays.copyOfRange(wb, d, d + len));
+                int q = d + len;
+                while (q + 4 <= wb.length && u16(wb, q) == 0x003C) {
+                    int l2 = u16(wb, q + 2);
+                    bl.add(java.util.Arrays.copyOfRange(wb, q + 4, Math.min(wb.length, q + 4 + l2)));
+                    q += 4 + l2;
+                }
+                Blocks r = new Blocks(bl);
+                r.i32();
+                int unique = r.i32();
+                for (int i = 0; i < unique && r.more(); i++) sst.add(r.xlString());
+                p = q;
+                continue;
+            } else if (inSheet && (id == 0x00FD || id == 0x0204 || id == 0x0203 || id == 0x027E)) {
+                int row = u16(wb, d), col = u16(wb, d + 2);
+                if (col <= 1) {
+                    String v = null;
+                    if (id == 0x00FD) {
+                        int idx = i32(wb, d + 6);
+                        v = idx >= 0 && idx < sst.size() ? sst.get(idx) : "";
+                    } else if (id == 0x0204) {
+                        List<byte[]> bl = new ArrayList<>();
+                        bl.add(java.util.Arrays.copyOfRange(wb, d + 6, d + len));
+                        v = new Blocks(bl).xlString();
+                    } else if (id == 0x0203) {
+                        double x = Double.longBitsToDouble(
+                                ((long) i32(wb, d + 6) & 0xffffffffL) | ((long) i32(wb, d + 10)) << 32);
+                        v = x == Math.rint(x) ? String.valueOf((long) x) : String.valueOf(x);
+                    } else {
+                        int rk = i32(wb, d + 6);
+                        double x = (rk & 2) != 0 ? (rk >> 2) : Double.longBitsToDouble(((long) (rk & 0xfffffffc)) << 32);
+                        if ((rk & 1) != 0) x /= 100;
+                        v = x == Math.rint(x) ? String.valueOf((long) x) : String.valueOf(x);
+                    }
+                    String[] r = rows.computeIfAbsent(row, k -> new String[2]);
+                    r[col] = v;
+                }
+            }
+            p = d + len;
+        }
+        return new ArrayList<>(rows.values());
     }
 
     // ───────── CSV ─────────
