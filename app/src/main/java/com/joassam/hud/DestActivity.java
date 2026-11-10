@@ -457,7 +457,9 @@ public class DestActivity extends Activity {
             int i = line.indexOf('=');
             if (i <= 0) continue;
             String n = line.substring(0, i).trim(), a = line.substring(i + 1).trim();
-            if (!n.isEmpty() && !a.isEmpty()) out.add(new String[]{n, a});
+            // 깨진 글자(잘못 읽은 파일 찌꺼기)는 버림
+            if (n.isEmpty() || a.isEmpty() || FavImport.broken(n) || FavImport.broken(a)) continue;
+            out.add(new String[]{n, a});
         }
         return out;
     }

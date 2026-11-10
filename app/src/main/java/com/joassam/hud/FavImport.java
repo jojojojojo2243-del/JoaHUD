@@ -22,16 +22,35 @@ final class FavImport {
     private FavImport() {
     }
 
+    /** 깨진 글자·제어문자가 섞였거나 너무 긴 값 */
+    static boolean broken(String s) {
+        if (s.length() > 120) return true;
+        for (char c : s.toCharArray()) {
+            if (c == '\uFFFD' || (c < 0x20 && c != '\t')) return true;
+            // 한글·영문·숫자·흔한 기호 외의 한자 등이 섞이면 깨진 것으로 봄
+            if (Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS) return true;
+        }
+        return false;
+    }
+
     static List<String[]> parse(byte[] data, String fileName) throws Exception {
+        // 옛 엑셀(.xls) 파일은 못 읽음 → 안내
+        if (data.length > 8 && (data[0] & 0xff) == 0xD0 && (data[1] & 0xff) == 0xCF && (data[2] & 0xff) == 0x11 && (data[3] & 0xff) == 0xE0) {
+            throw new Exception("옛 엑셀(.xls) 파일이에요. 엑셀에서 '다른 이름으로 저장 → Excel 통합 문서(.xlsx)'로 저장한 뒤 불러와 주세요");
+        }
         boolean zip = data.length > 4 && data[0] == 'P' && data[1] == 'K';
         List<String[]> rows = zip ? xlsx(data) : csv(data);
         List<String[]> out = new ArrayList<>();
+        int bad = 0;
+        for (String[] r : rows) for (String v : r) if (v != null && broken(v)) bad++;
+        if (!zip && bad > rows.size() / 2 && bad > 2) throw new Exception("파일 글자가 깨져서 읽을 수 없어요. 엑셀 .xlsx 또는 CSV(UTF-8)로 저장해 주세요");
         for (int i = 0; i < rows.size(); i++) {
             String[] r = rows.get(i);
             String n = r.length > 0 && r[0] != null ? r[0].trim() : "";
             String a = r.length > 1 && r[1] != null ? r[1].trim() : "";
             if (n.isEmpty() || a.isEmpty()) continue;
             if (i == 0 && (n.contains("이름") || n.contains("장소") || a.contains("주소"))) continue; // 제목 줄
+            if (broken(n) || broken(a)) continue;
             n = n.replace("=", " ").replace("\n", " ");
             a = a.replace("\n", " ");
             out.add(new String[]{n, a});

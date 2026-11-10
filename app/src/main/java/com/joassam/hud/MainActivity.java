@@ -418,19 +418,30 @@ public class MainActivity extends Activity {
             }
         });
         advanced.addView(imp);
-        EditText favs = new EditText(this);
-        favsEdit = favs;
-        favs.setHint("집=주소\n농장=주소\n하레하레=대전 ...");
-        favs.setText(p.getString("favs", ""));
-        favs.setMinLines(3);
-        favs.setSingleLine(false);
-        advanced.addView(favs);
-        Button favSave = button("자주 가는 곳 저장");
-        favSave.setOnClickListener(v -> {
-            p.edit().putString("favs", favs.getText().toString().trim()).apply();
-            Toast.makeText(this, DestActivity.favorites(p).size() + "곳 저장됨 — '집'처럼 이름만 말하면 바로 안내", Toast.LENGTH_LONG).show();
-        });
-        advanced.addView(favSave);
+        // 자주 가는 곳 목록: 줄마다 [수정] [삭제], 아래 [+ 추가] [전체 삭제]
+        favList = new LinearLayout(this);
+        favList.setOrientation(LinearLayout.VERTICAL);
+        advanced.addView(favList);
+        LinearLayout favBtns = new LinearLayout(this);
+        favBtns.setOrientation(LinearLayout.HORIZONTAL);
+        Button add = new Button(this);
+        add.setAllCaps(false);
+        add.setText("＋ 추가");
+        add.setOnClickListener(v -> editFav(-1));
+        Button clear = new Button(this);
+        clear.setAllCaps(false);
+        clear.setText("전체 삭제");
+        clear.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                .setMessage("자주 가는 곳을 모두 지울까요?")
+                .setPositiveButton("모두 지우기", (d, w) -> {
+                    p.edit().putString("favs", "").apply();
+                    refreshFavList();
+                })
+                .setNegativeButton("취소", null).show());
+        favBtns.addView(add, new LinearLayout.LayoutParams(0, -2, 1f));
+        favBtns.addView(clear, new LinearLayout.LayoutParams(0, -2, 1f));
+        advanced.addView(favBtns);
+        refreshFavList();
 
         advanced.addView(sub("🅿 주차 때 보여줄 전화번호"));
         EditText phone = new EditText(this);
@@ -571,7 +582,105 @@ public class MainActivity extends Activity {
     }
 
     private static final int REQ_IMPORT = 31;
-    private EditText favsEdit;
+    private LinearLayout favList;
+
+    /** 자주 가는 곳 목록 다시 그리기 */
+    private void refreshFavList() {
+        if (favList == null) return;
+        favList.removeAllViews();
+        java.util.List<String[]> favs = DestActivity.favorites(p);
+        // 깨진 글자 줄이 저장돼 있으면 자동으로 정리
+        if (p.getString("favs", "").split("\n").length != favs.size() && !p.getString("favs", "").isEmpty()) {
+            StringBuilder b = new StringBuilder();
+            for (String[] f : favs) {
+                if (b.length() > 0) b.append('\n');
+                b.append(f[0]).append('=').append(f[1]);
+            }
+            p.edit().putString("favs", b.toString()).apply();
+        }
+        if (favs.isEmpty()) {
+            TextView t = new TextView(this);
+            t.setText("(아직 없음 — ＋ 추가 또는 엑셀 불러오기)");
+            t.setTextColor(Color.GRAY);
+            t.setPadding(dp(8), dp(6), 0, dp(6));
+            favList.addView(t);
+            return;
+        }
+        for (int i = 0; i < favs.size(); i++) {
+            final int idx = i;
+            String[] f = favs.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(4), dp(4), 0, dp(4));
+            TextView t = new TextView(this);
+            t.setText((i + 1) + ". " + f[0] + "\n   " + f[1]);
+            t.setTextSize(14);
+            t.setTextColor(Color.BLACK);
+            row.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+            Button ed = new Button(this);
+            ed.setText("수정");
+            ed.setOnClickListener(v -> editFav(idx));
+            row.addView(ed, new LinearLayout.LayoutParams(-2, -2));
+            Button del = new Button(this);
+            del.setText("삭제");
+            del.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                    .setMessage("'" + f[0] + "'을(를) 지울까요?")
+                    .setPositiveButton("삭제", (d, w) -> {
+                        java.util.List<String[]> l = DestActivity.favorites(p);
+                        if (idx < l.size()) l.remove(idx);
+                        saveFavs(l);
+                    })
+                    .setNegativeButton("취소", null).show());
+            row.addView(del, new LinearLayout.LayoutParams(-2, -2));
+            favList.addView(row);
+        }
+    }
+
+    /** idx = -1 이면 새로 추가, 아니면 그 줄 수정 */
+    private void editFav(int idx) {
+        java.util.List<String[]> l = DestActivity.favorites(p);
+        String[] cur = idx >= 0 && idx < l.size() ? l.get(idx) : new String[]{"", ""};
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        EditText name = new EditText(this);
+        name.setHint("이름 (예: 집, 농장, 하레하레 본점)");
+        name.setText(cur[0]);
+        name.setSingleLine(true);
+        EditText addr = new EditText(this);
+        addr.setHint("주소 (예: 충남 공주시 계룡면 ○○길 12)");
+        addr.setText(cur[1]);
+        box.addView(name);
+        box.addView(addr);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(idx < 0 ? "자주 가는 곳 추가" : "자주 가는 곳 수정")
+                .setView(box)
+                .setPositiveButton("저장", (d, w) -> {
+                    String n = name.getText().toString().trim().replace("=", " ");
+                    String a = addr.getText().toString().trim().replace("\n", " ");
+                    if (n.isEmpty() || a.isEmpty()) {
+                        Toast.makeText(this, "이름과 주소를 모두 넣어 주세요", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    java.util.List<String[]> list = DestActivity.favorites(p);
+                    if (idx >= 0 && idx < list.size()) list.set(idx, new String[]{n, a});
+                    else list.add(new String[]{n, a});
+                    saveFavs(list);
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    private void saveFavs(java.util.List<String[]> l) {
+        StringBuilder b = new StringBuilder();
+        for (String[] f : l) {
+            if (b.length() > 0) b.append('\n');
+            b.append(f[0]).append('=').append(f[1]);
+        }
+        p.edit().putString("favs", b.toString()).apply();
+        refreshFavList();
+    }
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
@@ -589,7 +698,7 @@ public class MainActivity extends Activity {
             }
             String merged = FavImport.merge(p.getString("favs", ""), rows);
             p.edit().putString("favs", merged).apply();
-            if (favsEdit != null) favsEdit.setText(merged);
+            refreshFavList();
             NavListenerService.log("자주 가는 곳 " + rows.size() + "곳 불러옴");
             Toast.makeText(this, rows.size() + "곳 등록됐어요 (같은 이름은 새 주소로 바뀜)", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
