@@ -48,6 +48,7 @@ public class TmapA11yService extends AccessibilityService {
 
     @Override
     protected void onServiceConnected() {
+        instance = this;
         connected = true;
         status = "연결됨";
         handler.removeCallbacks(loop);
@@ -56,6 +57,10 @@ public class TmapA11yService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (System.currentTimeMillis() < autoStartUntil) {
+            handler.removeCallbacks(startLoop);
+            handler.postDelayed(startLoop, 600);
+        }
         try {
             if (event != null && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                     && event.getPackageName() != null) {
@@ -95,6 +100,7 @@ public class TmapA11yService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        instance = null;
         hideCover();
         connected = false;
         handler.removeCallbacks(loop);
@@ -121,6 +127,8 @@ public class TmapA11yService extends AccessibilityService {
             miniAt = System.currentTimeMillis();
         }
         if (r == null) hideCover();
+        if (r != null) widgetMissingSince = 0;
+        else maybeKickMini();
         if (r == null) {
             status = "티맵 미니 안내 창을 찾는 중 (서브폰 티맵 길안내 → 홈 버튼)";
             long now = System.currentTimeMillis();
@@ -510,6 +518,75 @@ public class TmapA11yService extends AccessibilityService {
         } catch (Throwable ignored) {
         }
         return b.append("]").toString();
+    }
+
+    static volatile TmapA11yService instance;
+    /** 이 시각까지 티맵 화면의 [안내 시작] 버튼을 찾아서 대신 누름 */
+    static volatile long autoStartUntil = 0;
+    private static final String[] START_WORDS = {"안내 시작", "안내시작", "길안내 시작", "경로 안내", "안내"};
+
+    /** 티맵 경로 화면에서 [안내 시작] 버튼을 찾아 누름 (목적지 화면에서 보낸 경우만, 20초 동안) */
+    private boolean tryAutoStart() {
+        if (System.currentTimeMillis() > autoStartUntil) return false;
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
+                for (String word : START_WORDS) {
+                    List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(word);
+                    if (found == null) continue;
+                    for (AccessibilityNodeInfo n : found) {
+                        CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
+                        if (t == null) continue;
+                        String ts = t.toString().replace(" ", "");
+                        if (!ts.equals(word.replace(" ", ""))) continue; // 정확히 그 글자인 버튼만
+                        AccessibilityNodeInfo c = n;
+                        for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
+                        if (c != null && c.isClickable() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                            autoStartUntil = 0;
+                            NavListenerService.log("티맵 [" + t + "] 버튼 자동으로 누름 → 길안내 시작");
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    private final Runnable startLoop = new Runnable() {
+        @Override
+        public void run() {
+            if (System.currentTimeMillis() > autoStartUntil) return;
+            if (!tryAutoStart()) handler.postDelayed(this, 700);
+        }
+    };
+    private long widgetMissingSince = 0, lastKick = 0;
+
+    /**
+     * HUD는 떠 있는데 티맵 미니 창이 없으면(티맵이 홈 버튼 없이 가려진 경우)
+     * 티맵을 잠깐 앞으로 → 홈 버튼 → HUD 다시 띄우기로 미니 창을 되살림 (1분에 한 번까지)
+     */
+    private void maybeKickMini() {
+        long now = System.currentTimeMillis();
+        if (widgetMissingSince == 0) widgetMissingSince = now;
+        if (now - widgetMissingSince < 6000 || now - lastKick < 60_000L) return;
+        if (now - NavListenerService.lastGuideSeen > 30_000L) return; // 길안내 중이 아님
+        if (AutoService.carState != 0) return; // 안드로이드 오토 방식에서는 안 함
+        if (!getSharedPreferences("hud", MODE_PRIVATE).getBoolean("kick_mini", true)) return;
+        android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
+        if (t == null) return;
+        lastKick = now;
+        NavListenerService.log("티맵 미니 창이 없어서 되살리는 중 (티맵 → 홈 → HUD)");
+        try {
+            startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            handler.postDelayed(() -> performGlobalAction(GLOBAL_ACTION_HOME), 1500);
+            handler.postDelayed(() -> startActivity(new android.content.Intent(this, HudActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)), 2800);
+        } catch (Exception e) {
+            NavListenerService.log("미니 창 되살리기 실패: " + e.getMessage());
+        }
     }
 
     /** 티맵 미니 창 화면 위치 (HUD가 피해서 그림) */

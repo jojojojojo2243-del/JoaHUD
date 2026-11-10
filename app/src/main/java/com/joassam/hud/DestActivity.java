@@ -258,7 +258,11 @@ public class DestActivity extends Activity {
         NavListenerService.destFlowAt = System.currentTimeMillis();
         String enc = Uri.encode(dest);
         List<String> urls = new ArrayList<>();
-        if (ll != null) urls.add("tmap://route?rGoName=" + Uri.encode(label) + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
+        if (ll != null) {
+            // "tmap://?…" 형식: 티맵이 바로 경로 화면(안내 버튼)으로 감. "tmap://route"는 경로 검색 화면에서 멈춤
+            urls.add("tmap://?rGoName=" + Uri.encode(label) + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
+            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 20_000L; // [안내] 버튼 자동 누르기
+        }
         urls.add("tmap://search?name=" + enc);
         for (String u : urls) {
             try {

@@ -164,12 +164,15 @@ public class NavListenerService extends NotificationListenerService {
 
     private long lastAutoOpen = 0;
     private long lastGuideAt = 0;
+    /** 마지막으로 티맵 길안내 알림을 본 시각 (미니 창 되살리기 판단용) */
+    static volatile long lastGuideSeen = 0;
 
     /** 티맵 길안내 알림을 봄: 새 길안내가 시작된 거면 4초 뒤 HUD 띄우기 (티맵 화면이 앞에 있어도) */
     private void guideSeen(SharedPreferences p) {
         long now = System.currentTimeMillis();
         boolean newSession = now - lastGuideAt > 120_000L;
         lastGuideAt = now;
+        lastGuideSeen = now;
         if (!newSession || !p.getBoolean("tmap_auto_hud", true)) return;
         handler.postDelayed(() -> {
             if (HudActivity.visible || DestActivity.visible || MainActivity.visible) return;
@@ -178,10 +181,8 @@ public class NavListenerService extends NotificationListenerService {
                     log("'다른 앱 위에 표시' 권한이 없어 HUD 자동 전환 못 함");
                     return;
                 }
-                startActivity(new android.content.Intent(this, HudActivity.class)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));
                 lastAutoOpen = System.currentTimeMillis();
-                log("티맵 길안내 시작 감지 → HUD 자동 전환");
+                openHudViaHome(this, "티맵 길안내 시작 감지 → HUD 자동 전환");
             } catch (Exception e) {
                 log("HUD 자동 전환 실패: " + e.getMessage());
             }
@@ -203,11 +204,33 @@ public class NavListenerService extends NotificationListenerService {
         lastAutoOpen = now;
         try {
             if (android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)) return;
-            startActivity(new android.content.Intent(this, HudActivity.class)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));
-            log("티맵 길안내 감지 → HUD 자동 실행");
+            openHudViaHome(this, "티맵 길안내 감지 → HUD 자동 실행");
         } catch (Exception e) {
             log("HUD 자동 실행 실패: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 티맵 미니 창은 '홈 버튼으로 나갈 때'만 생김 (HUD가 바로 덮으면 안 생김).
+     * 그래서 티맵이 앞에 있으면 먼저 홈 버튼을 대신 누르고 1.2초 뒤 HUD를 띄움.
+     */
+    static void openHudViaHome(android.content.Context c, String why) {
+        final android.content.Context app = c.getApplicationContext();
+        Runnable open = () -> {
+            try {
+                app.startActivity(new android.content.Intent(app, HudActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));
+                log(why);
+            } catch (Exception e) {
+                log("HUD 띄우기 실패: " + e.getMessage());
+            }
+        };
+        TmapA11yService a = TmapA11yService.instance;
+        if (a != null && TmapA11yService.TMAP.equals(TmapA11yService.fgPkg)) {
+            a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME);
+            new Handler(Looper.getMainLooper()).postDelayed(open, 1200);
+        } else {
+            open.run();
         }
     }
 
