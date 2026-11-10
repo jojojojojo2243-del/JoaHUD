@@ -337,6 +337,12 @@ public class DestActivity extends Activity {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        if (sr != null) {
+            try {
+                sr.destroy();
+            } catch (Exception ignored) {
+            }
+        }
         if (tts != null) {
             try {
                 tts.shutdown();
@@ -346,8 +352,98 @@ public class DestActivity extends Activity {
         super.onDestroy();
     }
 
+    private android.speech.SpeechRecognizer sr;
+    private int silent = 0;
+
+    /** 앱 안에서 직접 듣기 (구글 창 없이). 말이 늦어도 기다리고, 조용하면 알아서 다시 들음 */
     private void startVoice() {
         handler.removeCallbacks(idle);
+        boolean canInApp = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                && android.speech.SpeechRecognizer.isRecognitionAvailable(this);
+        if (!canInApp) {
+            startVoiceDialog();
+            return;
+        }
+        try {
+            if (sr == null) {
+                sr = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+                sr.setRecognitionListener(new android.speech.RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle b) { status.setText("🎤 듣고 있어요… 말씀하세요"); }
+                    @Override public void onBeginningOfSpeech() { status.setText("🎤 듣는 중…"); }
+                    @Override public void onRmsChanged(float v) { }
+                    @Override public void onBufferReceived(byte[] b) { }
+                    @Override public void onEndOfSpeech() { status.setText("🔎 알아듣는 중…"); }
+                    @Override public void onEvent(int t, Bundle b) { }
+
+                    @Override
+                    public void onPartialResults(Bundle b) {
+                        ArrayList<String> r = b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+                        if (r != null && !r.isEmpty()) status.setText("🎤 " + r.get(0));
+                    }
+
+                    @Override
+                    public void onResults(Bundle b) {
+                        ArrayList<String> r = b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+                        handler.postDelayed(idle, IDLE_MS);
+                        if (r != null && !r.isEmpty() && !r.get(0).trim().isEmpty()) {
+                            silent = 0;
+                            input.setText(VoicePick.clean(r.get(0)));
+                            NavListenerService.log("음성: " + r);
+                            heard(r);
+                        } else {
+                            onError(android.speech.SpeechRecognizer.ERROR_NO_MATCH);
+                        }
+                    }
+
+                    @Override
+                    public void onError(int e) {
+                        boolean nothing = e == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                                || e == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
+                        if (nothing && silent < 2) {
+                            // 아무 말도 못 들음 → 묻지 않고 조용히 다시 듣기 (최대 2번)
+                            silent++;
+                            handler.postDelayed(DestActivity.this::listen, 300);
+                            return;
+                        }
+                        silent = 0;
+                        if (!nothing) NavListenerService.log("음성 인식 오류 " + e + " → 구글 창으로");
+                        if (e == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                                || e == android.speech.SpeechRecognizer.ERROR_CLIENT) {
+                            startVoiceDialog();
+                            return;
+                        }
+                        handler.postDelayed(idle, IDLE_MS);
+                        missed(null);
+                    }
+                });
+            }
+            listen();
+        } catch (Exception e) {
+            startVoiceDialog();
+        }
+    }
+
+    private void listen() {
+        if (isFinishing() || sr == null) return;
+        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+                .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                // 말을 조금 늦게 시작하거나 중간에 쉬어도 끊지 않게
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 6000L);
+        try {
+            sr.cancel();
+            sr.startListening(i);
+        } catch (Exception e) {
+            startVoiceDialog();
+        }
+    }
+
+    /** 예전 방식: 구글 음성 창 */
+    private void startVoiceDialog() {
         try {
             Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)

@@ -589,6 +589,110 @@ public class TmapA11yService extends AccessibilityService {
         }
     }
 
+    private static final String[] END_WORDS = {"안내 종료", "안내종료", "길안내 종료", "경로 안내 종료", "주행 종료", "종료"};
+    private static final String[] CONFIRM_WORDS = {"종료", "확인", "예", "네"};
+
+    /**
+     * 시동 꺼짐: 티맵 알림에 종료 버튼이 없어서, 티맵 화면을 잠깐 열고 [안내 종료]를 대신 누름.
+     * 확인 창이 뜨면 [종료]/[확인]도 누르고, 끝나면 홈 → then 실행 (12초 안에 못 찾으면 그냥 진행)
+     */
+    static void endGuidance(Runnable then) {
+        TmapA11yService a = instance;
+        if (a == null) {
+            NavListenerService.log("티맵 종료 못 함: 접근성(안내판 읽기)이 꺼져 있음");
+            if (then != null) then.run();
+            return;
+        }
+        a.doEndGuidance(then);
+    }
+
+    private void doEndGuidance(Runnable then) {
+        android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
+        if (t == null) {
+            if (then != null) then.run();
+            return;
+        }
+        try {
+            startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            if (then != null) then.run();
+            return;
+        }
+        final long until = System.currentTimeMillis() + 12_000L;
+        final int[] stage = {0}; // 0 = 종료 버튼 찾기, 1 = 확인 창, 2 = 끝
+        final long[] clickedAt = {0};
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                long now = System.currentTimeMillis();
+                if (stage[0] == 0) {
+                    String hit = clickWord(END_WORDS);
+                    if (hit != null) {
+                        NavListenerService.log("시동 꺼짐 → 티맵 [" + hit + "] 눌러서 길안내 종료");
+                        stage[0] = 1;
+                        clickedAt[0] = now;
+                    }
+                } else if (stage[0] == 1) {
+                    String hit = clickWord(CONFIRM_WORDS);
+                    if (hit != null) NavListenerService.log("티맵 확인 창 [" + hit + "] 누름");
+                    if (hit != null || now - clickedAt[0] > 2500) stage[0] = 2;
+                }
+                if (stage[0] == 2 || now > until) {
+                    if (stage[0] != 2) NavListenerService.log("티맵 화면에서 종료 버튼 못 찾음 " + tmapButtons());
+                    performGlobalAction(GLOBAL_ACTION_HOME);
+                    if (then != null) handler.postDelayed(then, 800);
+                    return;
+                }
+                handler.postDelayed(this, 600);
+            }
+        }, 1500);
+    }
+
+    /** 티맵 창에서 글자가 정확히 같은 버튼을 찾아 누름 → 누른 글자 (없으면 null) */
+    private String clickWord(String[] words) {
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
+                for (String word : words) {
+                    List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(word);
+                    if (found == null) continue;
+                    for (AccessibilityNodeInfo n : found) {
+                        CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
+                        if (t == null || !t.toString().replace(" ", "").equals(word.replace(" ", ""))) continue;
+                        AccessibilityNodeInfo c = n;
+                        for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
+                        if (c != null && c.isClickable() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return t.toString();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 진단용: 티맵 화면에 있는 버튼 글자들 */
+    private String tmapButtons() {
+        StringBuilder b = new StringBuilder("[");
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
+                collectButtons(root, b, 0);
+            }
+        } catch (Throwable ignored) {
+        }
+        String r = b.append("]").toString();
+        return r.length() > 300 ? r.substring(0, 300) + "…]" : r;
+    }
+
+    private void collectButtons(AccessibilityNodeInfo n, StringBuilder b, int depth) {
+        if (n == null || depth > 25 || b.length() > 320) return;
+        CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
+        if (n.isClickable() && t != null && t.length() > 0 && t.length() < 15) b.append(t).append(", ");
+        for (int i = 0; i < n.getChildCount(); i++) collectButtons(n.getChild(i), b, depth + 1);
+    }
+
     /** 티맵 미니 창 화면 위치 (HUD가 피해서 그림) */
     static volatile int miniL, miniT, miniR, miniB;
     static volatile long miniAt = 0;

@@ -139,11 +139,11 @@ public class NavListenerService extends NotificationListenerService {
     }
 
     /** 시동 꺼짐: 티맵 길안내 알림의 [안내 종료] 버튼을 대신 눌러 티맵을 끝냄 */
-    static void stopTmap() {
+    static boolean stopTmap() {
         NavListenerService me = instance;
         if (me == null) {
             log("티맵 종료 못 함: 알림 접근이 꺼져 있음");
-            return;
+            return false;
         }
         boolean done = false;
         StringBuilder seen = new StringBuilder();
@@ -164,16 +164,9 @@ public class NavListenerService extends NotificationListenerService {
         } catch (Throwable e) {
             log("티맵 종료 오류: " + e.getMessage());
         }
-        if (done) {
-            log("시동 꺼짐 → 티맵 안내 종료 " + seen);
-        } else {
-            log("티맵 알림에 종료 버튼 없음 " + seen + " → 백그라운드 정리 시도");
-            try {
-                android.app.ActivityManager am = (android.app.ActivityManager) me.getSystemService(ACTIVITY_SERVICE);
-                am.killBackgroundProcesses(TmapA11yService.TMAP);
-            } catch (Throwable ignored) {
-            }
-        }
+        if (done) log("시동 꺼짐 → 티맵 안내 종료 " + seen);
+        else log("티맵 알림에 종료 버튼 없음 " + seen + " → 티맵 화면에서 종료 버튼 누르기");
+        return done;
     }
 
     /** 시동 끄면서 티맵을 끈 시각 (이때는 '다음 목적지' 안 물음) */

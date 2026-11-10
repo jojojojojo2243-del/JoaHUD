@@ -117,9 +117,17 @@ public class AutoService extends Service {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
         NavListenerService.stoppingTmapAt = System.currentTimeMillis();
-        if (p.getBoolean("stop_tmap", true)) NavListenerService.stopTmap();
-        if (p.getBoolean("park_show", true) && !p.getString("park_phone", "").isEmpty()) {
-            handler.postDelayed(() -> startFromBackground(new Intent(this, ParkActivity.class)), 1500);
+        final boolean park = p.getBoolean("park_show", true) && !p.getString("park_phone", "").isEmpty();
+        Runnable showParkScreen = () -> {
+            NavListenerService.stoppingTmapAt = System.currentTimeMillis();
+            if (park) startFromBackground(new Intent(this, ParkActivity.class));
+        };
+        if (p.getBoolean("stop_tmap", true) && System.currentTimeMillis() - NavListenerService.lastGuideSeen < 10 * 60_000L) {
+            // 알림 버튼이 있으면 그걸로, 없으면 티맵 화면에서 [안내 종료]를 대신 누름 → 그다음 번호 화면
+            if (NavListenerService.stopTmap()) handler.postDelayed(showParkScreen, 1500);
+            else TmapA11yService.endGuidance(showParkScreen);
+        } else {
+            handler.postDelayed(showParkScreen, 1500);
         }
     }
 

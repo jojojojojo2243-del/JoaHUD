@@ -150,10 +150,16 @@ public class MainActivity extends Activity {
 
         setContentView(sv);
 
+        java.util.List<String> perms = new java.util.ArrayList<>();
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
+            perms.add(Manifest.permission.POST_NOTIFICATIONS);
         }
+        // 목적지 음성: 앱 안에서 직접 들으려면 마이크 권한 필요
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (!perms.isEmpty()) requestPermissions(perms.toArray(new String[0]), 2);
         if (CaptureService.running) {
             startService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_STOP));
         }
