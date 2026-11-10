@@ -172,12 +172,15 @@ public class DestActivity extends Activity {
             }
         });
         // 손 안 대고: 소리로 "어디로 갈까요?" → 듣기
-        if (p.getBoolean("dest_voice", true)) handler.postDelayed(() -> ask("어디로 갈까요?"), 800);
+        nextMode = getIntent() != null && getIntent().getBooleanExtra("next", false);
+        if (nextMode) handler.postDelayed(() -> ask("도착했어요. 다음 목적지 있으세요?"), 800);
+        else if (p.getBoolean("dest_voice", true)) handler.postDelayed(() -> ask("어디로 갈까요?"), 800);
     }
 
     // ───────── 손 안 대고 말로만 목적지 정하기 ─────────
     private android.speech.tts.TextToSpeech tts;
     private boolean ttsReady = false;
+    private boolean nextMode = false;
     private int misses = 0;
     private List<String> choices = null;
     private String prompt = "어디로 갈까요?";
@@ -250,6 +253,17 @@ public class DestActivity extends Activity {
 
     /** 들은 말 처리 */
     private void heard(List<String> alts) {
+        if (nextMode && choices == null) {
+            String a0 = alts.get(0).replace(" ", "");
+            if (a0.matches(".*(없어|없습니다|아니|됐어|괜찮아|그만|끝|안가|없음).*") && a0.length() <= 8) {
+                speak("알겠습니다", this::finish);
+                return;
+            }
+            if (a0.matches("(네|예|응|있어|있습니다|어)")) {
+                ask("어디로 갈까요?");
+                return;
+            }
+        }
         if (choices != null) {
             for (String a : alts) {
                 int n = VoicePick.number(a);
@@ -286,6 +300,10 @@ public class DestActivity extends Activity {
     /** 못 알아들음: 1번째 → 다시, 2번째 → 자주 가는 곳 번호로, 3번째 → HUD만 */
     private void missed(String repeat) {
         misses++;
+        if (nextMode && misses >= 2) {
+            finish(); // 도착 후 물음: 대답이 없으면 조용히 닫기
+            return;
+        }
         if (misses >= 4) {
             speak("목적지 없이 HUD를 켤게요", this::openHudOnly);
         } else if (repeat != null) {
@@ -404,6 +422,16 @@ public class DestActivity extends Activity {
             } catch (SecurityException ignored) {
             }
             if (a == null || a.isEmpty()) a = g.getFromLocationName(q, 1);
+            // 못 찾으면 주소 뒤쪽(건물명·층·호수)을 잘라 가며 다시
+            if (a == null || a.isEmpty()) {
+                for (String t : trims(q)) {
+                    a = g.getFromLocationName(t, 1);
+                    if (a != null && !a.isEmpty()) {
+                        NavListenerService.log("주소 줄여서 찾음: " + t);
+                        break;
+                    }
+                }
+            }
             if (a != null && !a.isEmpty() && a.get(0).hasLatitude()) {
                 return new double[]{a.get(0).getLatitude(), a.get(0).getLongitude()};
             }
@@ -418,7 +446,10 @@ public class DestActivity extends Activity {
         List<String> urls = new ArrayList<>();
         if (ll != null) {
             // "tmap://?…" 형식: 티맵이 바로 경로 화면(안내 버튼)으로 감. "tmap://route"는 경로 검색 화면에서 멈춤
-            urls.add("tmap://?rGoName=" + Uri.encode(label) + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
+            // 티맵 버전마다 받는 이름이 달라서 두 가지(goal…, rGo…)를 함께 넣음
+            String n = Uri.encode(label);
+            urls.add("tmap://route?goalname=" + n + "&goalx=" + ll[1] + "&goaly=" + ll[0]
+                    + "&rGoName=" + n + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
             TmapA11yService.autoStartUntil = System.currentTimeMillis() + 20_000L; // [안내] 버튼 자동 누르기
         }
         urls.add("tmap://search?name=" + enc);
@@ -428,7 +459,7 @@ public class DestActivity extends Activity {
                         .setPackage(TmapA11yService.TMAP)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
-                NavListenerService.log("목적지 '" + dest + "' → 티맵 " + (u.contains("route") ? "길안내" : "검색") + " 실행");
+                NavListenerService.log("목적지 '" + dest + "' → 티맵 " + (u.contains("goalx") ? "길안내(좌표 " + String.format(Locale.ROOT, "%.4f,%.4f", ll[0], ll[1]) + ")" : "검색(좌표 못 찾음)") + " 실행");
                 finish();
                 return;
             } catch (Exception ignored) {
@@ -443,6 +474,19 @@ public class DestActivity extends Activity {
         } else {
             status.setText("티맵이 설치되어 있지 않아요");
         }
+    }
+
+    /** "대전 서구 원도안로26번길 15-5 1층 ○○빌딩" → ["대전 서구 원도안로26번길 15-5", "대전 서구 원도안로26번길", …] */
+    static List<String> trims(String q) {
+        List<String> out = new ArrayList<>();
+        String s = q.replaceAll("\\(.*?\\)", " ").replaceAll("[,·]", " ").replaceAll("\\s+", " ").trim();
+        // 도로명 + 건물번호까지만 (예: "원도안로26번길 15-5", "태리로 236")
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(.*?[가-힣0-9]+(로|길)(\\d+번?길)?\\s*\\d+(-\\d+)?)(\\s|$)").matcher(s);
+        if (m.find()) out.add(m.group(1).trim());
+        // 지번 주소: 동·리 + 번지 (예: "용암동 3087", "월암리 23-5")
+        java.util.regex.Matcher j = java.util.regex.Pattern.compile("^(.*?[가-힣]+(동|리|가)\\s*\\d+(-\\d+)?)(\\s|$)").matcher(s);
+        if (j.find() && !out.contains(j.group(1).trim())) out.add(j.group(1).trim());
+        return out;
     }
 
     private void openHudOnly() {

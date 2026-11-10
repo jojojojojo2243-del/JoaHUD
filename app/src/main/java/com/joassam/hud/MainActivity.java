@@ -386,6 +386,7 @@ public class MainActivity extends Activity {
         advanced.addView(check("목적지 화면에서 바로 음성 듣기", "dest_voice", true));
         advanced.addView(check("시동 끄면 주차 전화번호 화면", "park_show", true));
         advanced.addView(check("시동 끄면 티맵 길안내도 종료", "stop_tmap", true));
+        advanced.addView(check("목적지 도착하면 '다음 목적지 있으세요?' 묻기", "ask_next", true));
         Button ssidBtn = button(carSsidLabel());
         ssidBtn.setOnClickListener(v -> {
             String cur = AutoService.currentSsid(this);

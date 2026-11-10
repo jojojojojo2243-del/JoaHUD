@@ -83,6 +83,19 @@ public class NavListenerService extends NotificationListenerService {
             RouteGuide.clear();
             UdpSender.send(last.toJson());
             log("길안내 알림 종료: " + sbn.getPackageName());
+            askNextDestination(sbn.getPackageName());
+            return;
+        }
+        // 티맵 단독 모드: "경로주행" 알림이 사라짐 = 길안내 끝
+        if (TmapA11yService.TMAP.equals(sbn.getPackageName()) && guideStartAt != 0) {
+            try {
+                NavData d = NavParser.parse(this, sbn);
+                if (d.raw.contains("경로주행") || !d.dist.isEmpty() || !"NONE".equals(d.dir)) {
+                    log("티맵 길안내 끝");
+                    askNextDestination(sbn.getPackageName());
+                }
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -93,6 +106,7 @@ public class NavListenerService extends NotificationListenerService {
         boolean logAll = p.getBoolean("log_all", false);
         boolean watched = isWatched(pkg, p);
         if (!watched && !logAll) return;
+        if (!watched && (pkg.equals("com.android.systemui") || pkg.equals("android"))) return; // 충전 알림 등 반복 기록 막기
 
         NavData d = NavParser.parse(this, sbn);
         log((watched ? "★ " : "") + pkg + "\n   → [" + d.dir + " " + d.dist + (d.icon.isEmpty() ? " 그림없음" : " 그림있음") + "] " + d.raw);
@@ -162,6 +176,33 @@ public class NavListenerService extends NotificationListenerService {
         }
     }
 
+    /** 시동 끄면서 티맵을 끈 시각 (이때는 '다음 목적지' 안 물음) */
+    static volatile long stoppingTmapAt = 0;
+    private static long guideStartAt = 0;
+
+    /** 목적지 도착(티맵 길안내 끝) → "다음 목적지 있으세요?" */
+    private void askNextDestination(String pkg) {
+        long now = System.currentTimeMillis();
+        long started = guideStartAt;
+        guideStartAt = 0;
+        if (!TmapA11yService.TMAP.equals(pkg)) return;
+        if (!getSharedPreferences("hud", MODE_PRIVATE).getBoolean("ask_next", true)) return;
+        if (now - stoppingTmapAt < 15_000L) return;                 // 시동 끄면서 끈 것
+        if (!(AutoService.ignOn || AutoService.carState != 0)) return; // 운행 중이 아님
+        if (started == 0 || now - started < 60_000L) return;          // 너무 짧은 안내(취소 등)
+        handler.postDelayed(() -> {
+            if (DestActivity.visible) return;
+            try {
+                startActivity(new android.content.Intent(this, DestActivity.class)
+                        .putExtra("next", true)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                log("목적지 도착 → 다음 목적지 묻기");
+            } catch (Exception e) {
+                log("다음 목적지 화면 실패: " + e.getMessage());
+            }
+        }, 3000);
+    }
+
     private long lastAutoOpen = 0;
     private long lastGuideAt = 0;
     /** 마지막으로 티맵 길안내 알림을 본 시각 (미니 창 되살리기 판단용) */
@@ -173,6 +214,7 @@ public class NavListenerService extends NotificationListenerService {
         boolean newSession = now - lastGuideAt > 120_000L;
         lastGuideAt = now;
         lastGuideSeen = now;
+        if (guideStartAt == 0) guideStartAt = now;
         if (!newSession || !p.getBoolean("tmap_auto_hud", true)) return;
         handler.postDelayed(() -> {
             if (HudActivity.visible || DestActivity.visible || MainActivity.visible) return;

@@ -116,6 +116,7 @@ public class AutoService extends Service {
     private void showPark() {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
+        NavListenerService.stoppingTmapAt = System.currentTimeMillis();
         if (p.getBoolean("stop_tmap", true)) NavListenerService.stopTmap();
         if (p.getBoolean("park_show", true) && !p.getString("park_phone", "").isEmpty()) {
             handler.postDelayed(() -> startFromBackground(new Intent(this, ParkActivity.class)), 1500);
