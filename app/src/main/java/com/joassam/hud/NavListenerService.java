@@ -106,6 +106,11 @@ public class NavListenerService extends NotificationListenerService {
 
         // "실행 중" 같은 상태 알림이 진짜 안내를 덮어쓰지 않도록
         boolean useful = !d.dir.equals("NONE") || !d.dist.isEmpty();
+        // 티맵에서 직접 목적지를 넣고 길안내가 시작돼도 → 몇 초 뒤 HUD로 자동 전환
+        if (pkg.equals(TmapA11yService.TMAP) && !d.raw.contains("광고") && !d.raw.contains("Android Auto")
+                && (useful || d.raw.contains("경로주행") || d.raw.contains("길안내"))) {
+            guideSeen(p);
+        }
         // "TMAP이 Android Auto에 연결되었습니다" 같은 안내 아닌 알림은 HUD에 띄우지 않음
         if (!useful) return;
 
@@ -120,6 +125,30 @@ public class NavListenerService extends NotificationListenerService {
     }
 
     private long lastAutoOpen = 0;
+    private long lastGuideAt = 0;
+
+    /** 티맵 길안내 알림을 봄: 새 길안내가 시작된 거면 4초 뒤 HUD 띄우기 (티맵 화면이 앞에 있어도) */
+    private void guideSeen(SharedPreferences p) {
+        long now = System.currentTimeMillis();
+        boolean newSession = now - lastGuideAt > 120_000L;
+        lastGuideAt = now;
+        if (!newSession || !p.getBoolean("tmap_auto_hud", true)) return;
+        handler.postDelayed(() -> {
+            if (HudActivity.visible || DestActivity.visible || MainActivity.visible) return;
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)) {
+                    log("'다른 앱 위에 표시' 권한이 없어 HUD 자동 전환 못 함");
+                    return;
+                }
+                startActivity(new android.content.Intent(this, HudActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP));
+                lastAutoOpen = System.currentTimeMillis();
+                log("티맵 길안내 시작 감지 → HUD 자동 전환");
+            } catch (Exception e) {
+                log("HUD 자동 전환 실패: " + e.getMessage());
+            }
+        }, 4000);
+    }
     /** 목적지 화면에서 티맵을 연 시각 (이때는 티맵 화면이 앞에 있어도 바로 HUD로 전환) */
     static volatile long destFlowAt = 0;
 

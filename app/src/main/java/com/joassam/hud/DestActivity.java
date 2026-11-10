@@ -207,13 +207,24 @@ public class DestActivity extends Activity {
             return;
         }
         handler.removeCallbacks(idle);
-        saveRecent(dest);
         // "집", "농장"처럼 저장한 이름이면 그 주소로
-        final String addr = favAddress(p, dest);
-        status.setText("🔎 '" + dest + "'" + (addr.equals(dest) ? "" : " (" + addr + ")") + " 찾는 중…");
+        String fixed = dest;
+        if (favAddress(p, dest).equals(dest)) {
+            // 음성을 조금 잘못 알아들었으면 자주 가는 곳·최근 목적지 중 가장 비슷한 것으로
+            String near = closest(dest);
+            if (near != null && !near.equals(dest)) {
+                fixed = near;
+                Toast.makeText(this, "'" + near + "'(으)로 알아들었어요", Toast.LENGTH_SHORT).show();
+                NavListenerService.log("목적지 보정: '" + dest + "' → '" + near + "'");
+            }
+        }
+        final String dest2 = fixed;
+        final String addr = favAddress(p, dest2);
+        saveRecent(dest2);
+        status.setText("🔎 '" + dest2 + "'" + (addr.equals(dest2) ? "" : " (" + addr + ")") + " 찾는 중…");
         new Thread(() -> {
             double[] ll = geocode(addr);
-            runOnUiThread(() -> openTmap(addr.equals(dest) ? dest : addr, dest, ll));
+            runOnUiThread(() -> openTmap(addr.equals(dest2) ? dest2 : addr, dest2, ll));
         }).start();
     }
 
@@ -221,7 +232,20 @@ public class DestActivity extends Activity {
     private double[] geocode(String q) {
         try {
             if (!Geocoder.isPresent()) return null;
-            List<Address> a = new Geocoder(this, Locale.KOREA).getFromLocationName(q, 1);
+            Geocoder g = new Geocoder(this, Locale.KOREA);
+            List<Address> a = null;
+            // 지금 위치 근처(약 50km)에서 먼저 찾기 → 같은 이름이 여러 곳이면 가까운 곳
+            try {
+                android.location.LocationManager lm = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+                android.location.Location here = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER);
+                if (here == null) here = lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER);
+                if (here != null) {
+                    double la = here.getLatitude(), lo = here.getLongitude();
+                    a = g.getFromLocationName(q, 1, la - 0.45, lo - 0.55, la + 0.45, lo + 0.55);
+                }
+            } catch (SecurityException ignored) {
+            }
+            if (a == null || a.isEmpty()) a = g.getFromLocationName(q, 1);
             if (a != null && !a.isEmpty() && a.get(0).hasLatitude()) {
                 return new double[]{a.get(0).getLatitude(), a.get(0).getLongitude()};
             }
@@ -289,6 +313,59 @@ public class DestActivity extends Activity {
             }
         }
         return best != null ? best : said;
+    }
+
+    /** 자주 가는 곳·최근 목적지 중 소리(자모)가 가장 비슷한 것 (70% 이상 비슷할 때만) */
+    private String closest(String said) {
+        String a = jamo(said);
+        if (a.length() < 2) return null;
+        String best = null;
+        double bestScore = 0;
+        List<String> cands = new ArrayList<>();
+        for (String[] f : favorites(p)) cands.add(f[0]);
+        cands.addAll(recent());
+        for (String c : cands) {
+            String b = jamo(c);
+            if (b.isEmpty()) continue;
+            int d = lev(a, b);
+            double score = 1.0 - (double) d / Math.max(a.length(), b.length());
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+            }
+        }
+        return bestScore >= 0.70 ? best : null;
+    }
+
+    /** 한글을 자음·모음으로 풀기 (하레→ㅎㅏㄹㅔ), 띄어쓰기 무시 */
+    static String jamo(String s) {
+        StringBuilder b = new StringBuilder();
+        for (char ch : s.replace(" ", "").toCharArray()) {
+            if (ch >= 0xAC00 && ch <= 0xD7A3) {
+                int i = ch - 0xAC00;
+                b.append((char) (0x1100 + i / 588)).append((char) (0x1161 + (i % 588) / 28));
+                if (i % 28 != 0) b.append((char) (0x11A7 + i % 28));
+            } else {
+                b.append(Character.toLowerCase(ch));
+            }
+        }
+        return b.toString();
+    }
+
+    static int lev(String a, String b) {
+        int[] prev = new int[b.length() + 1], cur = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) prev[j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            cur[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int c = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                cur[j] = Math.min(Math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + c);
+            }
+            int[] t = prev;
+            prev = cur;
+            cur = t;
+        }
+        return prev[b.length()];
     }
 
     private List<String> recent() {
