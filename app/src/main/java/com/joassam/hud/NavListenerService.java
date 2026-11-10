@@ -124,6 +124,44 @@ public class NavListenerService extends NotificationListenerService {
         if (System.currentTimeMillis() - TmapA11yService.lastAaData > 3000 && !TmapEdc.fresh()) UdpSender.send(d.toJson());
     }
 
+    /** 시동 꺼짐: 티맵 길안내 알림의 [안내 종료] 버튼을 대신 눌러 티맵을 끝냄 */
+    static void stopTmap() {
+        NavListenerService me = instance;
+        if (me == null) {
+            log("티맵 종료 못 함: 알림 접근이 꺼져 있음");
+            return;
+        }
+        boolean done = false;
+        StringBuilder seen = new StringBuilder();
+        try {
+            for (StatusBarNotification sb : me.getActiveNotifications()) {
+                if (!TmapA11yService.TMAP.equals(sb.getPackageName())) continue;
+                android.app.Notification.Action[] acts = sb.getNotification().actions;
+                if (acts == null) continue;
+                for (android.app.Notification.Action a : acts) {
+                    String t = a.title == null ? "" : a.title.toString();
+                    seen.append('[').append(t).append(']');
+                    if (!done && (t.contains("종료") || t.contains("끝") || t.contains("중지") || t.equalsIgnoreCase("exit") || t.equalsIgnoreCase("stop"))) {
+                        a.actionIntent.send();
+                        done = true;
+                    }
+                }
+            }
+        } catch (Throwable e) {
+            log("티맵 종료 오류: " + e.getMessage());
+        }
+        if (done) {
+            log("시동 꺼짐 → 티맵 안내 종료 " + seen);
+        } else {
+            log("티맵 알림에 종료 버튼 없음 " + seen + " → 백그라운드 정리 시도");
+            try {
+                android.app.ActivityManager am = (android.app.ActivityManager) me.getSystemService(ACTIVITY_SERVICE);
+                am.killBackgroundProcesses(TmapA11yService.TMAP);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     private long lastAutoOpen = 0;
     private long lastGuideAt = 0;
 

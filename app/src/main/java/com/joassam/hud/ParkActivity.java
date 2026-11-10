@@ -103,18 +103,9 @@ public class ParkActivity extends Activity {
         t1.setGravity(Gravity.CENTER);
         box.addView(t1, new LinearLayout.LayoutParams(-1, -2));
 
-        // 번호를 "010 / 3527 / 9288" 세 줄로 나누고, 줄마다 화면에 맞춰 최대한 크게
-        for (String part : splitPhone(phone)) {
-            TextView t = new TextView(this);
-            t.setText(part);
-            t.setTextColor(Color.WHITE);
-            t.setTypeface(Typeface.DEFAULT_BOLD);
-            t.setGravity(Gravity.CENTER);
-            t.setSingleLine(true);
-            t.setIncludeFontPadding(false);
-            t.setAutoSizeTextTypeUniformWithConfiguration(16, 400, 2, android.util.TypedValue.COMPLEX_UNIT_SP);
-            box.addView(t, new LinearLayout.LayoutParams(-1, 0, 1f));
-        }
+        // 번호: 가로 화면은 한 줄(010-3527-9288), 세로 화면은 세 줄(010 / 3527 / 9288)
+        // 화면 폭·높이에 맞춰 잘리지 않는 가장 큰 글씨로 직접 그림
+        box.addView(new PhoneView(this, splitPhone(phone)), new LinearLayout.LayoutParams(-1, 0, 1f));
 
         TextView t3 = new TextView(this);
         t3.setText("(화면을 두 번 누르면 닫힘)");
@@ -151,6 +142,43 @@ public class ParkActivity extends Activity {
         } catch (Exception ignored) {
         }
         handler.removeCallbacks(shift);
+    }
+
+    /** 전화번호를 화면에 꽉 차게, 절대 잘리지 않게 그리는 뷰 */
+    static final class PhoneView extends View {
+        private final java.util.List<String> parts;
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+        PhoneView(Context c, java.util.List<String> parts) {
+            super(c);
+            this.parts = parts;
+            paint.setColor(Color.WHITE);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (w > h * 1.2f) lines.add(String.join("-", parts)); // 가로: 한 줄
+            else lines.addAll(parts);                              // 세로: 줄 바꿈
+            // 기준 크기 100으로 재서 폭·높이 모두 맞는 크기 계산
+            paint.setTextSize(100f);
+            float maxW = 1;
+            for (String l : lines) maxW = Math.max(maxW, paint.measureText(l));
+            float byW = 100f * (w * 0.94f) / maxW;
+            float byH = h / (lines.size() * 1.12f) / 0.75f; // 숫자 높이 ≈ 글자크기의 0.75
+            float size = Math.min(byW, byH);
+            paint.setTextSize(size);
+            float lineH = size * 0.75f * 1.12f;
+            float top = (h - lineH * lines.size()) / 2f;
+            for (int i = 0; i < lines.size(); i++) {
+                float base = top + lineH * i + size * 0.75f + (lineH - size * 0.75f) / 2f;
+                c.drawText(lines.get(i), w / 2f, base, paint);
+            }
+        }
     }
 
     /** 010-3527-9288 / 01035279288 / 010 3527 9288 → [010, 3527, 9288] */
