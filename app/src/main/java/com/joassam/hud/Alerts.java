@@ -172,18 +172,39 @@ public final class Alerts {
                 for (int page = 1; page <= 120; page++) {
                     String url = API + "?serviceKey=" + enc + "&pageNo=" + page + "&numOfRows=1000&type=json";
                     String body = get(url);
-                    if (body.trim().startsWith("<")) {
-                        // 키 오류 등은 XML로 옴
-                        throw new Exception("서버 응답 오류: " + body.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim());
+                    String t = body.trim();
+                    String snip = t.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ");
+                    if (snip.length() > 160) snip = snip.substring(0, 160);
+                    if (!t.startsWith("{")) {
+                        // 키 오류·서비스 오류는 XML이나 글자로 옴
+                        throw new Exception(keyHint(snip));
                     }
-                    JSONObject res = new JSONObject(body).getJSONObject("response");
+                    JSONObject root = new JSONObject(t);
+                    JSONObject res = root.optJSONObject("response");
+                    if (res == null) res = root;
                     JSONObject head = res.optJSONObject("header");
-                    if (head != null && !"00".equals(head.optString("resultCode", "00"))) {
-                        throw new Exception(head.optString("resultMsg", "오류") + " (" + head.optString("resultCode") + ")");
+                    String code = head != null ? head.optString("resultCode", "00") : res.optString("resultCode", "00");
+                    if (!"00".equals(code) && !"0".equals(code) && !code.isEmpty()) {
+                        String msg = head != null ? head.optString("resultMsg", "") : res.optString("resultMsg", "");
+                        throw new Exception(keyHint(msg + " (" + code + ")"));
                     }
-                    JSONObject b = res.getJSONObject("body");
-                    if (total < 0) total = b.optInt("totalCount", 0);
-                    JSONArray items = b.optJSONArray("items");
+                    // odcloud 형식 {"code":-4,"msg":"등록되지 않은 인증키"} 오류
+                    if (root.has("code") && root.has("msg") && !root.has("data")) {
+                        throw new Exception(keyHint(root.optString("msg") + " (" + root.optString("code") + ")"));
+                    }
+                    JSONObject b = res.optJSONObject("body");
+                    JSONArray items;
+                    if (b != null) {
+                        if (total < 0) total = b.optInt("totalCount", 0);
+                        items = b.optJSONArray("items");
+                    } else if (root.optJSONArray("data") != null) {
+                        // odcloud 형식 {"totalCount":..,"data":[...]}
+                        if (total < 0) total = root.optInt("totalCount", 0);
+                        items = root.optJSONArray("data");
+                        b = root;
+                    } else {
+                        throw new Exception(keyHint("예상 못한 응답: " + snip));
+                    }
                     if (items == null) {
                         JSONObject io = b.optJSONObject("items");
                         if (io != null) items = io.optJSONArray("item");
@@ -234,6 +255,16 @@ public final class Alerts {
             NavListenerService.log("단속카메라 자료 업데이트 완료: " + count + "곳");
             updating = false;
         }).start();
+    }
+
+    /** 서버 오류 글자를 알아듣기 쉽게 */
+    private static String keyHint(String m) {
+        String u = m.toUpperCase(java.util.Locale.ROOT);
+        if (u.contains("NOT_REGISTERED") || m.contains("등록되지 않은") || u.contains("SERVICE KEY") || u.contains("SERVICE_KEY") || u.contains("UNAUTHORIZED") || u.contains("30)"))
+            return "인증키가 아직 등록 전이거나 틀림 — 신청 후 1~2시간 뒤 다시 (" + m + ")";
+        if (u.contains("LIMITED") || u.contains("22)")) return "오늘 사용량 초과 — 내일 자동 재시도 (" + m + ")";
+        if (u.contains("NO_OPENAPI") || u.contains("API NOT FOUND") || u.contains("12)")) return "이 데이터에 활용신청이 안 된 키 (" + m + ")";
+        return m;
     }
 
     /** 항목 하나 → "위도,경도,제한속도,표시" (이름이 조금 달라도 찾아냄) */
