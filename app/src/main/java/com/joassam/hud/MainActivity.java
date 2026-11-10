@@ -403,7 +403,23 @@ public class MainActivity extends Activity {
         advanced.addView(ssidBtn);
 
         advanced.addView(sub("⭐ 자주 가는 곳 — 한 줄에 '이름=주소' (예: 집=충남 공주시 계룡면 ○○길 12)"));
+        Button imp = button("📄 엑셀/CSV 파일로 한 번에 불러오기 (A열 이름, B열 주소)");
+        imp.setOnClickListener(v -> {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "text/csv", "text/comma-separated-values", "text/plain", "application/vnd.ms-excel"});
+            try {
+                startActivityForResult(pick, REQ_IMPORT);
+            } catch (Exception e) {
+                Toast.makeText(this, "파일 선택 화면을 열 수 없어요", Toast.LENGTH_LONG).show();
+            }
+        });
+        advanced.addView(imp);
         EditText favs = new EditText(this);
+        favsEdit = favs;
         favs.setHint("집=주소\n농장=주소\n하레하레=대전 ...");
         favs.setText(p.getString("favs", ""));
         favs.setMinLines(3);
@@ -552,6 +568,33 @@ public class MainActivity extends Activity {
         if (requestCode == 1) startActivity(new Intent(this, HudActivity.class));
         if (requestCode == 3 && p.getBoolean("auto_mode", true)) AutoService.start(this);
         refresh();
+    }
+
+    private static final int REQ_IMPORT = 31;
+    private EditText favsEdit;
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_IMPORT || res != RESULT_OK || data == null || data.getData() == null) return;
+        try (java.io.InputStream in = getContentResolver().openInputStream(data.getData())) {
+            java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) o.write(buf, 0, n);
+            java.util.List<String[]> rows = FavImport.parse(o.toByteArray(), String.valueOf(data.getData()));
+            if (rows.isEmpty()) {
+                Toast.makeText(this, "읽은 장소가 없어요 — A열 이름, B열 주소인지 확인해 주세요", Toast.LENGTH_LONG).show();
+                return;
+            }
+            String merged = FavImport.merge(p.getString("favs", ""), rows);
+            p.edit().putString("favs", merged).apply();
+            if (favsEdit != null) favsEdit.setText(merged);
+            NavListenerService.log("자주 가는 곳 " + rows.size() + "곳 불러옴");
+            Toast.makeText(this, rows.size() + "곳 등록됐어요 (같은 이름은 새 주소로 바뀜)", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "불러오기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private String carSsidLabel() {

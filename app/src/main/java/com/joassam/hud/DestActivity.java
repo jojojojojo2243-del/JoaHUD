@@ -150,7 +150,158 @@ public class DestActivity extends Activity {
         setContentView(sv);
 
         handler.postDelayed(idle, IDLE_MS);
-        if (p.getBoolean("dest_voice", true)) handler.postDelayed(this::startVoice, 900);
+        tts = new android.speech.tts.TextToSpeech(this, st -> {
+            if (st == android.speech.tts.TextToSpeech.SUCCESS) {
+                tts.setLanguage(Locale.KOREAN);
+                tts.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String id) {
+                    }
+
+                    @Override
+                    public void onDone(String id) {
+                        runOnUiThread(() -> runAfterSpeech(id));
+                    }
+
+                    @Override
+                    public void onError(String id) {
+                        runOnUiThread(() -> runAfterSpeech(id));
+                    }
+                });
+                ttsReady = true;
+            }
+        });
+        // 손 안 대고: 소리로 "어디로 갈까요?" → 듣기
+        if (p.getBoolean("dest_voice", true)) handler.postDelayed(() -> ask("어디로 갈까요?"), 800);
+    }
+
+    // ───────── 손 안 대고 말로만 목적지 정하기 ─────────
+    private android.speech.tts.TextToSpeech tts;
+    private boolean ttsReady = false;
+    private int misses = 0;
+    private List<String> choices = null;
+    private String prompt = "어디로 갈까요?";
+    private String afterId = null;
+    private Runnable after = null;
+
+    /** 소리로 말한 뒤 then 실행 (음성 출력이 안 되면 바로 실행) */
+    private void speak(String text, Runnable then) {
+        status.setText("🔊 " + text);
+        String id = "u" + System.nanoTime();
+        afterId = id;
+        after = then;
+        if (ttsReady) {
+            Bundle b = new Bundle();
+            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, b, id);
+            // 혹시 끝 신호가 안 오면 8초 뒤 그냥 진행
+            handler.postDelayed(() -> runAfterSpeech(id), 8000);
+        } else {
+            handler.postDelayed(() -> runAfterSpeech(id), 400);
+        }
+    }
+
+    private void runAfterSpeech(String id) {
+        if (id == null || !id.equals(afterId)) return;
+        afterId = null;
+        Runnable r = after;
+        after = null;
+        if (r != null && !isFinishing()) r.run();
+    }
+
+    /** 물어보고 → 듣기 */
+    private void ask(String q) {
+        prompt = q;
+        // 음성 출력 준비가 아직이면 잠깐 기다림 (최대 2초)
+        if (!ttsReady && waitTts++ < 5) {
+            handler.postDelayed(() -> ask(q), 400);
+            return;
+        }
+        speak(q, this::startVoice);
+    }
+
+    private int waitTts = 0;
+
+    private static String ro(String name) {
+        char last = name.isEmpty() ? 'a' : name.charAt(name.length() - 1);
+        if (last >= 0xAC00 && last <= 0xD7A3) {
+            int jong = (last - 0xAC00) % 28;
+            return name + (jong == 0 || jong == 8 ? "로" : "으로");
+        }
+        return name + "로";
+    }
+
+    private static String listText(List<String> c) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < c.size(); i++) b.append(i + 1).append("번 ").append(c.get(i)).append(". ");
+        return b.toString();
+    }
+
+    private List<String> knownNames() {
+        List<String> n = new ArrayList<>();
+        for (String[] f : favorites(p)) n.add(f[0]);
+        for (String r : recent()) if (!n.contains(r)) n.add(r);
+        return n;
+    }
+
+    private void choose(String name) {
+        choices = null;
+        speak(ro(name) + " 안내합니다", () -> go(name));
+    }
+
+    /** 들은 말 처리 */
+    private void heard(List<String> alts) {
+        if (choices != null) {
+            for (String a : alts) {
+                int n = VoicePick.number(a);
+                if (n >= 1 && n <= choices.size()) {
+                    choose(choices.get(n - 1));
+                    return;
+                }
+            }
+            List<String> c = VoicePick.candidates(choices, alts);
+            if (c.size() == 1) {
+                choose(c.get(0));
+                return;
+            }
+            missed("번호로 말씀해 주세요. " + listText(choices));
+            return;
+        }
+        List<String> c = VoicePick.candidates(knownNames(), alts);
+        if (c.size() == 1) {
+            choose(c.get(0));
+        } else if (c.size() >= 2) {
+            choices = c;
+            ask(listText(c) + "몇 번으로 갈까요?");
+        } else {
+            String said = VoicePick.clean(alts.get(0));
+            if (said.replace(" ", "").length() >= 2) {
+                // 저장 안 된 곳: 주소·장소 이름으로 바로 찾기
+                speak(ro(said) + " 찾아볼게요", () -> go(said));
+            } else {
+                missed(null);
+            }
+        }
+    }
+
+    /** 못 알아들음: 1번째 → 다시, 2번째 → 자주 가는 곳 번호로, 3번째 → HUD만 */
+    private void missed(String repeat) {
+        misses++;
+        if (misses >= 4) {
+            speak("목적지 없이 HUD를 켤게요", this::openHudOnly);
+        } else if (repeat != null) {
+            ask(repeat);
+        } else if (misses == 1) {
+            ask("잘 못 들었어요. 다시 말씀해 주세요");
+        } else {
+            List<String> favNames = new ArrayList<>();
+            for (String[] f : favorites(p)) favNames.add(f[0]);
+            if (favNames.isEmpty()) {
+                ask("다시 한 번 말씀해 주세요");
+                return;
+            }
+            choices = favNames.size() > 5 ? new ArrayList<>(favNames.subList(0, 5)) : favNames;
+            ask(listText(choices) + "몇 번으로 갈까요?");
+        }
     }
 
     @Override
@@ -168,6 +319,12 @@ public class DestActivity extends Activity {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        if (tts != null) {
+            try {
+                tts.shutdown();
+            } catch (Exception ignored) {
+            }
+        }
         super.onDestroy();
     }
 
@@ -177,7 +334,8 @@ public class DestActivity extends Activity {
             Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-                    .putExtra(RecognizerIntent.EXTRA_PROMPT, "어디로 갈까요?");
+                    .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                    .putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
             startActivityForResult(i, REQ_VOICE);
         } catch (Exception e) {
             status.setText("음성 인식을 쓸 수 없어요 — 주소를 입력해 주세요");
@@ -190,13 +348,13 @@ public class DestActivity extends Activity {
         super.onActivityResult(req, res, data);
         if (req != REQ_VOICE) return;
         ArrayList<String> r = data != null ? data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS) : null;
+        handler.postDelayed(idle, IDLE_MS);
         if (res == RESULT_OK && r != null && !r.isEmpty()) {
-            String said = r.get(0).replaceAll("(으로|로)?\\s*(가자|가줘|가 줘|안내해 ?줘|안내|길안내)\\s*$", "").trim();
-            input.setText(said);
-            go(said);
+            input.setText(VoicePick.clean(r.get(0)));
+            NavListenerService.log("음성: " + r);
+            heard(r);
         } else {
-            status.setText("잘 못 들었어요 — 다시 말하거나 주소를 입력하세요");
-            handler.postDelayed(idle, IDLE_MS);
+            missed(null);
         }
     }
 
