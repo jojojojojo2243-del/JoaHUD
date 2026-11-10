@@ -368,6 +368,7 @@ public class MainActivity extends Activity {
         advanced.addView(autoMode);
         advanced.addView(check("시동 끄면 HUD 자동 종료", "auto_close", true));
         advanced.addView(check("자동 업데이트", "auto_update", true));
+        advanced.addView(check("HUD가 티맵 미니 창을 피해서 그리기", "avoid_mini", true));
         advanced.addView(check("티맵 미니 창 검게 가리기 (안드로이드 14 이상, 앞유리에 안 비침)", "hide_mini", true));
         advanced.addView(check("HUD 밝기: 폰 자동 밝기 따르기 (끄면 항상 최대)", "auto_bright", true));
         Button pubBtn = button("단속카메라 공공데이터 키 입력/변경");

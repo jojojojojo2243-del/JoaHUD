@@ -105,14 +105,31 @@ public class HudView extends View {
         boolean hasFrame = frame != null && now - lastFrame < 2500;
 
         // ── 가로 화면: 순정 HUD 스타일 (왼쪽 회전안내 · 가운데 큰 속도 · 위 시계) ──
+        // 티맵 미니 창이 화면에 있으면 그 자리를 피해서, 남은 가장 넓은 빈 곳에 HUD 전체를 그림
+        RectF area = freeArea(w, h);
+        if (area != null) {
+            c.save();
+            c.translate(area.left, area.top);
+            c.clipRect(0, 0, area.width(), area.height());
+            int aw = (int) area.width(), ah = (int) area.height();
+            boolean land = aw > ah;
+            if (land) drawLandscapeHud(c, aw, ah, guiding, stale, hasFrame);
+            else drawPortraitHud(c, aw, ah, guiding, stale, hasFrame);
+            drawPublicAlert(c, aw, ah, land, guiding);
+            c.restore();
+            postInvalidateDelayed(500);
+            return;
+        }
         if (landscape) {
             drawLandscapeHud(c, w, h, guiding, stale, hasFrame);
             drawPublicAlert(c, w, h, true, guiding);
+            if (TmapA11yService.miniAt > 0) postInvalidateDelayed(1000);
             return;
         }
         if (!landscape) {
             drawPortraitHud(c, w, h, guiding, stale, hasFrame);
             drawPublicAlert(c, w, h, false, guiding);
+            if (TmapA11yService.miniAt > 0) postInvalidateDelayed(1000);
             return;
         }
 
@@ -373,6 +390,40 @@ public class HudView extends View {
         String dist = nav.remainDist >= 1000
                 ? String.format(Locale.KOREA, "%.1fkm", nav.remainDist / 1000f) : nav.remainDist + "m";
         return time + "   " + dist;
+    }
+
+    /** 미니 창을 뺀 나머지 중 가장 넓은 직사각형 (미니 창이 없거나 가려져 있으면 null) */
+    private RectF freeArea(int w, int h) {
+        if (TmapA11yService.miniHidden) return null;
+        if (System.currentTimeMillis() - TmapA11yService.miniAt > 4000) return null;
+        if (!getContext().getSharedPreferences("hud", 0).getBoolean("avoid_mini", true)) return null;
+        // 화면 좌표 → 이 뷰 좌표 (뷰가 화면 전체를 덮고, 반전은 가운데 기준)
+        int[] loc = new int[2];
+        View parent = (View) getParent();
+        if (parent != null) parent.getLocationOnScreen(loc);
+        float ox = loc[0] + getLeft(), oy = loc[1] + getTop();
+        float l = TmapA11yService.miniL - ox, t = TmapA11yService.miniT - oy;
+        float r = TmapA11yService.miniR - ox, b = TmapA11yService.miniB - oy;
+        if (getScaleX() < 0) { float nl = w - r; r = w - l; l = nl; }
+        if (getScaleY() < 0) { float nt = h - b; b = h - t; t = nt; }
+        // 여유 간격
+        float m = Math.min(w, h) * 0.02f;
+        l -= m; t -= m; r += m; b += m;
+        if (r <= 0 || b <= 0 || l >= w || t >= h) return null; // 화면 밖
+        RectF[] cands = {
+                new RectF(0, 0, w, Math.max(0, t)),          // 위
+                new RectF(0, Math.min(h, b), w, h),          // 아래
+                new RectF(0, 0, Math.max(0, l), h),          // 왼쪽
+                new RectF(Math.min(w, r), 0, w, h)           // 오른쪽
+        };
+        RectF best = null;
+        float bestArea = 0;
+        for (RectF rc : cands) {
+            float a = rc.width() * rc.height();
+            if (a > bestArea) { bestArea = a; best = rc; }
+        }
+        if (best == null || bestArea < w * h * 0.35f) return null; // 너무 좁으면 그냥 전체에
+        return best;
     }
 
     /** 지금 적용되는 제한속도 (티맵 공식 연동 → 공공데이터 순) */

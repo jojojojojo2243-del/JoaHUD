@@ -115,6 +115,11 @@ public class TmapA11yService extends AccessibilityService {
         if (scanAndroidAuto()) return;
         // 2순위: 폰 화면 위 티맵 미니 안내판
         final Rect r = findTmapWidget();
+        // HUD가 피해서 그릴 수 있게 미니 창 위치를 알려 줌 (가려서 숨긴 경우는 피할 필요 없음)
+        if (r != null) {
+            miniL = r.left; miniT = r.top; miniR = r.right; miniB = r.bottom;
+            miniAt = System.currentTimeMillis();
+        }
         if (r == null) hideCover();
         if (r == null) {
             status = "티맵 미니 안내 창을 찾는 중 (서브폰 티맵 길안내 → 홈 버튼)";
@@ -507,6 +512,13 @@ public class TmapA11yService extends AccessibilityService {
         return b.append("]").toString();
     }
 
+    /** 티맵 미니 창 화면 위치 (HUD가 피해서 그림) */
+    static volatile int miniL, miniT, miniR, miniB;
+    static volatile long miniAt = 0;
+
+    /** 미니 창을 덮개로 가렸는지 (가렸으면 피할 필요 없음) */
+    static volatile boolean miniHidden = false;
+
     private int widgetId = -1;
     private volatile boolean windowShotFailed = false;
     private android.view.View cover;
@@ -534,6 +546,7 @@ public class TmapA11yService extends AccessibilityService {
                 wm.updateViewLayout(cover, lp);
             }
             coverRect.set(r);
+            miniHidden = true;
         } catch (Throwable t) {
             windowShotFailed = true;
             cover = null;
@@ -542,6 +555,7 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     private void hideCover() {
+        miniHidden = false;
         if (cover == null) return;
         try {
             ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).removeView(cover);
