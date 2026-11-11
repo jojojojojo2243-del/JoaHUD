@@ -53,6 +53,7 @@ final class WakeWord {
             status = "음성 인식 없음";
             return;
         }
+        restoreMusic(act);
         on = true;
         errors = 0;
         muteBeep(true);
@@ -73,10 +74,10 @@ final class WakeWord {
         muteBeep(false);
     }
 
-    /** 듣기 시작할 때마다 나는 '띵' 소리를 막음 (시스템 소리만, 티맵 안내 음성은 그대로) */
+    /** '띵' 소리를 막음: 시스템·알림 소리는 듣는 동안 계속 끄고 */
     private void muteBeep(boolean mute) {
+        AudioManager am = (AudioManager) act.getSystemService(Activity.AUDIO_SERVICE);
         try {
-            AudioManager am = (AudioManager) act.getSystemService(Activity.AUDIO_SERVICE);
             if (mute) {
                 if (savedSystemVol < 0) savedSystemVol = am.getStreamVolume(AudioManager.STREAM_SYSTEM);
                 am.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0);
@@ -86,7 +87,64 @@ final class WakeWord {
             }
         } catch (Exception ignored) {
         }
+        try {
+            am.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION,
+                    mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0);
+        } catch (Exception ignored) {
+        }
+        if (!mute) musicMute(false);
     }
+
+    /** 삼성 폰은 '띵'을 미디어 소리로 냄 → 듣기를 켜고 끄는 1초 남짓만 미디어 소리를 끔.
+     *  티맵이 말하는 중이면 끄지 않음 (그때는 다시 듣기를 미룸). */
+    private boolean musicMuted = false;
+    private final Runnable unmuteMusic = () -> musicMute(false);
+
+    private void musicMute(boolean mute) {
+        if (mute == musicMuted) return;
+        try {
+            AudioManager am = (AudioManager) act.getSystemService(Activity.AUDIO_SERVICE);
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                    mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0);
+            musicMuted = mute;
+            act.getSharedPreferences("hud", Activity.MODE_PRIVATE).edit().putBoolean("music_muted", mute).apply();
+        } catch (Exception ignored) {
+        }
+        h.removeCallbacks(unmuteMusic);
+        if (mute) h.postDelayed(unmuteMusic, 2500); // 무슨 일이 있어도 2.5초 뒤엔 다시 켬
+    }
+
+    private boolean tmapTalking() {
+        try {
+            AudioManager am = (AudioManager) act.getSystemService(Activity.AUDIO_SERVICE);
+            return !musicMuted && am.isMusicActive();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 혹시 앱이 꺼지면서 미디어 소리가 꺼진 채로 남았으면 되살림 */
+    static void restoreMusic(android.content.Context c) {
+        SharedPreferences p = c.getSharedPreferences("hud", Activity.MODE_PRIVATE);
+        if (!p.getBoolean("music_muted", false)) return;
+        try {
+            AudioManager am = (AudioManager) c.getSystemService(Activity.AUDIO_SERVICE);
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
+        } catch (Exception ignored) {
+        }
+        p.edit().putBoolean("music_muted", false).apply();
+    }
+
+    /** 말이 없으면 기다리다 끝나며 '띵' 나기 전에 우리가 조용히 끊고 다시 시작 */
+    private final Runnable quietRestart = () -> {
+        if (!on) return;
+        if (tmapTalking()) { h.postDelayed(this.quietRestartRef(), 1000); return; }
+        musicMute(true);
+        try { if (sr != null) sr.cancel(); } catch (Exception ignored) { }
+        h.postDelayed(this::listen, 150);
+    };
+
+    private Runnable quietRestartRef() { return quietRestart; }
 
     /** 배터리 온도(℃) */
     private float temp() {
@@ -109,6 +167,11 @@ final class WakeWord {
             h.postDelayed(this::listen, 30_000);
             return;
         }
+        if (tmapTalking()) { // 티맵 안내 음성 중엔 '띵'이 겹치지 않게 끝날 때까지 기다림
+            h.postDelayed(this::listen, 1000);
+            return;
+        }
+        musicMute(true);
         try {
             if (sr == null) {
                 sr = SpeechRecognizer.createSpeechRecognizer(act);
@@ -123,6 +186,8 @@ final class WakeWord {
                     .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L);
             sr.cancel();
             sr.startListening(i);
+            h.removeCallbacks(quietRestart);
+            h.postDelayed(quietRestart, 4500);
             status = "'" + word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)) + "' 듣는 중";
         } catch (Exception e) {
             again(5000);
@@ -131,16 +196,27 @@ final class WakeWord {
 
     private void again(long ms) {
         if (!on) return;
+        h.removeCallbacks(quietRestart);
         h.removeCallbacksAndMessages(null);
+        if (musicMuted) h.postDelayed(unmuteMusic, Math.min(ms + 1500, 2500));
         h.postDelayed(this::listen, ms);
     }
 
     private final RecognitionListener listener = new RecognitionListener() {
-        @Override public void onReadyForSpeech(Bundle b) { }
-        @Override public void onBeginningOfSpeech() { }
+        @Override public void onReadyForSpeech(Bundle b) {
+            h.removeCallbacks(unmuteMusic);
+            h.postDelayed(unmuteMusic, 400); // 시작 '띵'이 지나간 뒤 미디어 소리 되살림
+        }
+        @Override public void onBeginningOfSpeech() {
+            h.removeCallbacks(quietRestart); // 말하는 중엔 끊지 않음 (대신 최대 10초)
+            h.postDelayed(quietRestart, 10_000);
+        }
         @Override public void onRmsChanged(float v) { }
         @Override public void onBufferReceived(byte[] b) { }
-        @Override public void onEndOfSpeech() { }
+        @Override public void onEndOfSpeech() {
+            h.removeCallbacks(quietRestart);
+            if (!tmapTalking()) musicMute(true); // 끝날 때 나는 '띵'도 막음
+        }
         @Override public void onEvent(int t, Bundle b) { }
 
         @Override
