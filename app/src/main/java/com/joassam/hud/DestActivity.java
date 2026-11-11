@@ -552,7 +552,7 @@ public class DestActivity extends Activity {
             String n = Uri.encode(label);
             urls.add("tmap://route?goalname=" + n + "&goalx=" + ll[1] + "&goaly=" + ll[0]
                     + "&rGoName=" + n + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
-            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 20_000L; // [안내] 버튼 자동 누르기
+            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 30_000L; // [안내] 버튼 자동 누르기
         }
         urls.add("tmap://search?name=" + enc);
         for (String u : urls) {

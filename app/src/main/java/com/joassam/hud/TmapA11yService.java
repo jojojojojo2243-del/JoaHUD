@@ -528,6 +528,12 @@ public class TmapA11yService extends AccessibilityService {
     /** 티맵 경로 화면에서 [안내 시작] 버튼을 찾아 누름 (목적지 화면에서 보낸 경우만, 20초 동안) */
     private boolean tryAutoStart() {
         if (System.currentTimeMillis() > autoStartUntil) return false;
+        // 티맵을 새로 켰을 때 뜨는 "지도 화면 제공을 위해 리소스를 갱신합니다" → [확인] 대신 누름
+        if (tmapTextShown("리소스") && clickWord(new String[]{"확인"}) != null) {
+            NavListenerService.log("티맵 '리소스 갱신' 창 [확인] 누름");
+            autoStartUntil = Math.max(autoStartUntil, System.currentTimeMillis() + 40_000L); // 받는 동안 더 기다림
+            return false;
+        }
         try {
             for (AccessibilityWindowInfo w : getWindows()) {
                 AccessibilityNodeInfo root = w.getRoot();
@@ -713,6 +719,20 @@ public class TmapA11yService extends AccessibilityService {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    /** 티맵 화면에 이 글자가 들어간 문구가 보이는지 */
+    private boolean tmapTextShown(String part) {
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
+                List<AccessibilityNodeInfo> f = root.findAccessibilityNodeInfosByText(part);
+                if (f != null && !f.isEmpty()) return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     /** 진단용: 티맵 화면에 있는 버튼 글자들 */
