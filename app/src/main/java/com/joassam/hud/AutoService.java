@@ -77,12 +77,26 @@ public class AutoService extends Service {
                 // 메인폰 핫스팟이 붙을 시간을 조금 기다렸다가 판단
                 handler.postDelayed(AutoService.this::onPowerOn, 8000);
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(i.getAction())) {
-                onPowerOff();
+                // 무선 충전에서 폰이 살짝 밀려 잠깐 끊긴 것일 수 있으니 6초 기다렸다 판단
+                handler.removeCallbacks(confirmOff);
+                handler.postDelayed(confirmOff, 6000);
             }
         }
     };
 
+    private final Runnable confirmOff = () -> {
+        if (isCharging()) {
+            NavListenerService.log("충전이 잠깐 끊겼다 다시 연결됨 → 시동 유지");
+            return;
+        }
+        onPowerOff();
+    };
+
     private void onPowerOn() {
+        if (ignOn) {
+            handler.removeCallbacks(confirmOff); // 운행 중 잠깐 끊겼던 것 → 아무것도 안 함
+            return;
+        }
         ParkActivity.closeIfOpen();
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (queryCarState() != 0) return;          // 안드로이드 오토 방식이면 기존 흐름 사용

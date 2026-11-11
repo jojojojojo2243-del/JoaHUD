@@ -296,11 +296,17 @@ public class HudActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
+        // 운전 중 "조아야" 부르면 목적지 바꾸기 (HUD가 떠 있을 때만 들음)
+        if (wake == null) wake = new WakeWord(this);
+        wake.start();
     }
+
+    private WakeWord wake;
 
     @Override
     protected void onPause() {
         visible = false;
+        if (wake != null) wake.stop();
         super.onPause();
     }
 

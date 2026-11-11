@@ -392,6 +392,23 @@ public class MainActivity extends Activity {
         advanced.addView(check("목적지 화면에서 바로 음성 듣기", "dest_voice", true));
         advanced.addView(check("시동 끄면 주차 전화번호 화면", "park_show", true));
         advanced.addView(check("시동 끄면 티맵 길안내도 종료", "stop_tmap", true));
+        advanced.addView(check("운전 중 부르는 말로 목적지 바꾸기 (HUD 화면에서만 들음, 폰 42℃ 넘으면 쉼)", "wake_on", true));
+        LinearLayout wrow = new LinearLayout(this);
+        wrow.setOrientation(LinearLayout.HORIZONTAL);
+        EditText wakeIn = new EditText(this);
+        wakeIn.setHint("부르는 말 (기본: 조아야)");
+        wakeIn.setText(WakeWord.word(p));
+        wakeIn.setSingleLine(true);
+        Button wakeSave = new Button(this);
+        wakeSave.setText("저장");
+        wakeSave.setOnClickListener(v -> {
+            String w = wakeIn.getText().toString().trim();
+            p.edit().putString("wake_word", w.isEmpty() ? "조아야" : w).apply();
+            Toast.makeText(this, "'" + WakeWord.word(p) + "' 하고 부르면 목적지를 물어봐요 (예: '" + WakeWord.word(p) + " 집')", Toast.LENGTH_LONG).show();
+        });
+        wrow.addView(wakeIn, new LinearLayout.LayoutParams(0, -2, 1f));
+        wrow.addView(wakeSave, new LinearLayout.LayoutParams(-2, -2));
+        advanced.addView(wrow);
         advanced.addView(check("목적지 도착하면 '다음 목적지 있으세요?' 묻기", "ask_next", true));
         Button ssidBtn = button(carSsidLabel());
         ssidBtn.setOnClickListener(v -> {

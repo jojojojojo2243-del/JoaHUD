@@ -173,7 +173,13 @@ public class DestActivity extends Activity {
         });
         // 손 안 대고: 소리로 "어디로 갈까요?" → 듣기
         nextMode = getIntent() != null && getIntent().getBooleanExtra("next", false);
-        if (nextMode) handler.postDelayed(() -> ask("도착했어요. 다음 목적지 있으세요?"), 800);
+        String said0 = getIntent() != null ? getIntent().getStringExtra("said") : null;
+        if (said0 != null && !said0.trim().isEmpty()) {
+            // "조아야 집" 처럼 부르면서 바로 말한 경우: 묻지 않고 바로 처리
+            List<String> l = new ArrayList<>();
+            l.add(said0);
+            handler.postDelayed(() -> heard(l), 600);
+        } else if (nextMode) handler.postDelayed(() -> ask("도착했어요. 다음 목적지 있으세요?"), 800);
         else if (p.getBoolean("dest_voice", true)) handler.postDelayed(() -> ask("어디로 갈까요?"), 800);
     }
 
