@@ -589,12 +589,14 @@ public class TmapA11yService extends AccessibilityService {
         }
     }
 
-    private static final String[] END_WORDS = {"안내 종료", "안내종료", "길안내 종료", "경로 안내 종료", "주행 종료", "종료"};
-    private static final String[] CONFIRM_WORDS = {"종료", "확인", "예", "네"};
+    // 1단계: 길안내 화면의 [안내종료] (확인 창이 바로 떠 있으면 [앱 종료]부터)
+    private static final String[] END_WORDS = {"앱 종료", "티맵 종료", "TMAP 종료", "안내 종료", "길안내 종료", "경로 안내 종료", "주행 종료"};
+    // 2단계: "종료하시겠습니까?" 창 → [앱 종료]가 있으면 그것(티맵까지 완전히 끔), 없으면 [안내 종료 ①]
+    private static final String[] CONFIRM_WORDS = {"앱 종료", "티맵 종료", "TMAP 종료", "앱종료", "안내 종료", "종료", "확인", "예"};
 
     /**
-     * 시동 꺼짐: 티맵 알림에 종료 버튼이 없어서, 티맵 화면을 잠깐 열고 [안내 종료]를 대신 누름.
-     * 확인 창이 뜨면 [종료]/[확인]도 누르고, 끝나면 홈 → then 실행 (12초 안에 못 찾으면 그냥 진행)
+     * 시동 꺼짐: 티맵 알림에 종료 버튼이 없어서, 티맵 화면을 잠깐 열고 [안내종료] → [앱 종료]를 대신 누름.
+     * 티맵이 실제로 꺼질 때까지 기다린 뒤 홈 → then 실행 (최대 15초)
      */
     static void endGuidance(Runnable then) {
         TmapA11yService a = instance;
@@ -618,9 +620,10 @@ public class TmapA11yService extends AccessibilityService {
             if (then != null) then.run();
             return;
         }
-        final long until = System.currentTimeMillis() + 12_000L;
-        final int[] stage = {0}; // 0 = 종료 버튼 찾기, 1 = 확인 창, 2 = 끝
-        final long[] clickedAt = {0};
+        final long until = System.currentTimeMillis() + 15_000L;
+        final int[] stage = {0}; // 0 = 안내종료 찾기, 1 = 확인 창, 2 = 티맵이 꺼지길 기다림, 3 = 끝
+        final long[] stageAt = {System.currentTimeMillis()};
+        final int[] gone = {0};
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -628,38 +631,79 @@ public class TmapA11yService extends AccessibilityService {
                 if (stage[0] == 0) {
                     String hit = clickWord(END_WORDS);
                     if (hit != null) {
-                        NavListenerService.log("시동 꺼짐 → 티맵 [" + hit + "] 눌러서 길안내 종료");
-                        stage[0] = 1;
-                        clickedAt[0] = now;
+                        NavListenerService.log("시동 꺼짐 → 티맵 [" + hit + "] 누름");
+                        stage[0] = norm(hit).contains("앱") || norm(hit).contains("티맵") || norm(hit).contains("TMAP") ? 2 : 1;
+                        stageAt[0] = now;
                     }
                 } else if (stage[0] == 1) {
                     String hit = clickWord(CONFIRM_WORDS);
-                    if (hit != null) NavListenerService.log("티맵 확인 창 [" + hit + "] 누름");
-                    if (hit != null || now - clickedAt[0] > 2500) stage[0] = 2;
+                    if (hit != null) {
+                        NavListenerService.log("티맵 확인 창 [" + hit + "] 누름");
+                        stage[0] = 2;
+                        stageAt[0] = now;
+                    } else if (now - stageAt[0] > 4000) {
+                        stage[0] = 2; // 확인 창 없이 바로 끝난 경우
+                        stageAt[0] = now;
+                    }
+                } else if (stage[0] == 2) {
+                    // 티맵 창이 사라지거나(앱 종료) 길안내 알림이 끝날 때까지 기다림 — 카운트다운 중에 홈으로 나가면 취소됨
+                    if (!tmapOnScreen()) gone[0]++;
+                    else gone[0] = 0;
+                    if (gone[0] >= 2 || now - stageAt[0] > 6000) stage[0] = 3;
                 }
-                if (stage[0] == 2 || now > until) {
-                    if (stage[0] != 2) NavListenerService.log("티맵 화면에서 종료 버튼 못 찾음 " + tmapButtons());
+                if (stage[0] == 3 || now > until) {
+                    if (stage[0] == 0) NavListenerService.log("티맵 화면에서 종료 버튼 못 찾음 " + tmapButtons());
+                    else if (gone[0] >= 2) NavListenerService.log("티맵 완전히 꺼짐");
                     performGlobalAction(GLOBAL_ACTION_HOME);
-                    if (then != null) handler.postDelayed(then, 800);
+                    // 길안내만 끝나고 티맵이 남아 있으면 뒤에서 정리
+                    handler.postDelayed(() -> {
+                        try {
+                            ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).killBackgroundProcesses(TMAP);
+                        } catch (Throwable ignored) {
+                        }
+                    }, 1500);
+                    if (then != null) handler.postDelayed(then, 900);
                     return;
                 }
-                handler.postDelayed(this, 600);
+                handler.postDelayed(this, 500);
             }
         }, 1500);
     }
 
-    /** 티맵 창에서 글자가 정확히 같은 버튼을 찾아 누름 → 누른 글자 (없으면 null) */
-    private String clickWord(String[] words) {
+    /** 글자 비교용: 띄어쓰기·숫자·동그라미 숫자·괄호 빼기 ("안내 종료 ①" → "안내종료") */
+    static String norm(String t) {
+        return t.replaceAll("[\\s0-9\u2460-\u2473\u24EA\u2776-\u277F()\\[\\]]", "");
+    }
+
+    /** 티맵 창이 아직 화면에 있는지 */
+    private boolean tmapOnScreen() {
         try {
             for (AccessibilityWindowInfo w : getWindows()) {
                 AccessibilityNodeInfo root = w.getRoot();
-                if (root == null || root.getPackageName() == null || !TMAP.contentEquals(root.getPackageName())) continue;
-                for (String word : words) {
-                    List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(word);
+                if (root != null && root.getPackageName() != null && TMAP.contentEquals(root.getPackageName())) return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 티맵 창에서 글자가 같은 버튼(숫자·띄어쓰기 무시)을 찾아 누름 — words 순서가 우선순위 */
+    private String clickWord(String[] words) {
+        try {
+            java.util.List<AccessibilityNodeInfo> roots = new java.util.ArrayList<>();
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root != null && root.getPackageName() != null && TMAP.contentEquals(root.getPackageName())) roots.add(root);
+            }
+            for (String word : words) {
+                String want = norm(word);
+                String core = want.length() > 2 ? want.substring(want.length() - 2) : want; // "종료"·"확인"
+                for (AccessibilityNodeInfo root : roots) {
+                    List<AccessibilityNodeInfo> found = root.findAccessibilityNodeInfosByText(core);
                     if (found == null) continue;
                     for (AccessibilityNodeInfo n : found) {
                         CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
-                        if (t == null || !t.toString().replace(" ", "").equals(word.replace(" ", ""))) continue;
+                        if (t == null || !norm(t.toString()).equals(want)) continue;
                         AccessibilityNodeInfo c = n;
                         for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
                         if (c != null && c.isClickable() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return t.toString();
