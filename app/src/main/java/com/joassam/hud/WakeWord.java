@@ -31,6 +31,10 @@ final class WakeWord {
     private boolean hot = false;
     private int errors = 0;
     private int savedSystemVol = -1;
+    /** 폰 안 인식기(소리 없음)를 쓰는 중인지. 안 되면 구글 인식기로 바꾸고 기억함 */
+    private boolean onDevice = false;
+    private static boolean onDeviceFailed = false;
+    private boolean onDeviceWorked = false;
     static volatile String status = "";
 
     WakeWord(Activity a) {
@@ -171,10 +175,23 @@ final class WakeWord {
             h.postDelayed(this::listen, 1000);
             return;
         }
-        musicMute(true);
         try {
             if (sr == null) {
-                sr = SpeechRecognizer.createSpeechRecognizer(act);
+                onDevice = false;
+                if (!onDeviceFailed && android.os.Build.VERSION.SDK_INT >= 33
+                        && SpeechRecognizer.isOnDeviceRecognitionAvailable(act)) {
+                    try {
+                        sr = SpeechRecognizer.createOnDeviceSpeechRecognizer(act);
+                        onDevice = true;
+                        NavListenerService.log("부르는 말: 폰 안 인식기로 듣기 (띵 소리 없음)");
+                    } catch (Exception e) {
+                        sr = null;
+                    }
+                }
+                if (sr == null) {
+                    sr = SpeechRecognizer.createSpeechRecognizer(act);
+                    NavListenerService.log("부르는 말: 구글 인식기로 듣기 (띵 소리를 미디어 음소거로 막음)");
+                }
                 sr.setRecognitionListener(listener);
             }
             Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -184,10 +201,11 @@ final class WakeWord {
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true) // 폰 안에서 처리(데이터·열 절약), 안 되면 자동으로 온라인
                     .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L);
+            if (!onDevice) musicMute(true);
             sr.cancel();
             sr.startListening(i);
             h.removeCallbacks(quietRestart);
-            h.postDelayed(quietRestart, 4500);
+            h.postDelayed(quietRestart, onDevice ? 30_000 : 3500);
             status = "'" + word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)) + "' 듣는 중";
         } catch (Exception e) {
             again(5000);
@@ -205,7 +223,7 @@ final class WakeWord {
     private final RecognitionListener listener = new RecognitionListener() {
         @Override public void onReadyForSpeech(Bundle b) {
             h.removeCallbacks(unmuteMusic);
-            h.postDelayed(unmuteMusic, 400); // 시작 '띵'이 지나간 뒤 미디어 소리 되살림
+            if (musicMuted) h.postDelayed(unmuteMusic, 1200); // 시작 '띵'이 지나간 뒤 미디어 소리 되살림
         }
         @Override public void onBeginningOfSpeech() {
             h.removeCallbacks(quietRestart); // 말하는 중엔 끊지 않음 (대신 최대 10초)
@@ -215,7 +233,7 @@ final class WakeWord {
         @Override public void onBufferReceived(byte[] b) { }
         @Override public void onEndOfSpeech() {
             h.removeCallbacks(quietRestart);
-            if (!tmapTalking()) musicMute(true); // 끝날 때 나는 '띵'도 막음
+            if (!onDevice && !tmapTalking()) musicMute(true); // 끝날 때 나는 '띵'도 막음
         }
         @Override public void onEvent(int t, Bundle b) { }
 
@@ -227,6 +245,7 @@ final class WakeWord {
         @Override
         public void onResults(Bundle b) {
             errors = 0;
+            if (onDevice) onDeviceWorked = true;
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             if (r != null && check(r)) return;
             again(200);
@@ -234,6 +253,23 @@ final class WakeWord {
 
         @Override
         public void onError(int e) {
+            // 폰 안 인식기가 한국어를 못 하거나 연결이 안 되면 → 구글 인식기로 바꿈
+            if (onDevice && !onDeviceWorked && (e == 5 || e == 11 || e == 12 || e == 13 || e == 14)) {
+                onDeviceFailed = true;
+                NavListenerService.log("폰 안 인식기 사용 불가(오류 " + e + ") → 구글 인식기로 바꿈");
+                if ((e == 12 || e == 13) && android.os.Build.VERSION.SDK_INT >= 33) {
+                    try {
+                        Intent d = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR");
+                        sr.triggerModelDownload(d); // 한국어 자료를 받아 두면 다음부터 소리 없이 들음
+                    } catch (Exception ignored) {
+                    }
+                }
+                try { sr.destroy(); } catch (Exception ignored) { }
+                sr = null;
+                again(500);
+                return;
+            }
             if (e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                 errors = 0;
                 again(200);
