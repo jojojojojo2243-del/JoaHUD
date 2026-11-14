@@ -123,7 +123,7 @@ public class NavListenerService extends NotificationListenerService {
         // 티맵에서 직접 목적지를 넣고 길안내가 시작돼도 → 몇 초 뒤 HUD로 자동 전환
         if (pkg.equals(TmapA11yService.TMAP) && !d.raw.contains("광고") && !d.raw.contains("Android Auto")
                 && (useful || d.raw.contains("경로주행") || d.raw.contains("길안내"))) {
-            guideSeen(p);
+            guideSeen(p, d.raw);
         }
         // "TMAP이 Android Auto에 연결되었습니다" 같은 안내 아닌 알림은 HUD에 띄우지 않음
         if (!useful) return;
@@ -201,10 +201,17 @@ public class NavListenerService extends NotificationListenerService {
     /** 마지막으로 티맵 길안내 알림을 본 시각 (미니 창 되살리기 판단용) */
     static volatile long lastGuideSeen = 0;
 
+    private static String lastGuideDest = "";
+
     /** 티맵 길안내 알림을 봄: 새 길안내가 시작된 거면 4초 뒤 HUD 띄우기 (티맵 화면이 앞에 있어도) */
-    private void guideSeen(SharedPreferences p) {
+    private void guideSeen(SharedPreferences p, String raw) {
         long now = System.currentTimeMillis();
-        boolean newSession = now - lastGuideAt > 120_000L;
+        // 새 길안내: 2분 넘게 쉬었다 시작 / 앞 안내가 끝난 뒤(도착) 다음 안내 / 알림의 목적지("… > 목적지")가 바뀜
+        String dest = raw == null ? "" : raw.contains(">") ? raw.substring(raw.lastIndexOf('>') + 1).trim() : "";
+        boolean destChanged = !dest.isEmpty() && !lastGuideDest.isEmpty() && !dest.equals(lastGuideDest);
+        if (!dest.isEmpty()) lastGuideDest = dest;
+        boolean newSession = now - lastGuideAt > 120_000L || guideStartAt == 0 || destChanged;
+        if (destChanged) log("목적지 바뀜 → " + dest);
         lastGuideAt = now;
         lastGuideSeen = now;
         if (guideStartAt == 0) guideStartAt = now;

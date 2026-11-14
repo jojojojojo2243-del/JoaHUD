@@ -134,7 +134,29 @@ final class VoicePick {
             return containing.size() > 5 ? new ArrayList<>(containing.subList(0, 5)) : containing;
         }
         if (bestContained != null) return single(bestContained);
-        // 4) 발음이 비슷한 이름 (잘못 알아들은 경우)
+        // 4) 낱말이 겹치는 이름 ("화요일에 베이커리" → "하레하레베이커리카페": '베이커리'가 겹침)
+        //    앞말을 잘못 알아들어도 뒷말이 맞으면 찾음. 더 많이(길게) 겹치는 이름 우선
+        final java.util.Map<String, Integer> overlap = new java.util.HashMap<>();
+        for (String h : heard) {
+            for (String w : clean(h).split("[\\s,.]+")) {
+                w = w.replaceAll("(으로|로|에|에서|의|은|는|이|가|을|를)$", "");
+                if (w.length() < 2) continue;
+                for (String n : names) {
+                    if (ns(n).contains(w)) {
+                        int o = overlap.getOrDefault(n, 0);
+                        if (w.length() > o) overlap.put(n, w.length());
+                    }
+                }
+            }
+        }
+        if (!overlap.isEmpty()) {
+            int best = 0;
+            for (int v : overlap.values()) best = Math.max(best, v);
+            List<String> ov = new ArrayList<>();
+            for (String n : names) if (overlap.getOrDefault(n, 0) == best) ov.add(n);
+            return ov.size() > 5 ? new ArrayList<>(ov.subList(0, 5)) : ov;
+        }
+        // 5) 발음이 비슷한 이름 (잘못 알아들은 경우)
         final java.util.Map<String, Double> score = new java.util.HashMap<>();
         for (String h : heard) {
             String c = clean(h);

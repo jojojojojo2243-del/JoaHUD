@@ -376,6 +376,7 @@ public class MainActivity extends Activity {
         advanced.addView(check("자동 업데이트", "auto_update", true));
         advanced.addView(check("HUD가 티맵 미니 창을 피해서 그리기", "avoid_mini", true));
         advanced.addView(check("티맵 미니 창 검게 가리기 (안드로이드 14 이상, 앞유리에 안 비침)", "hide_mini", true));
+        advanced.addView(check("녹색 바탕 빼고 화살표·글자만 보이기 (앞유리에 잘 비침, 끄면 티맵 원래 색)", "white_only", true));
         advanced.addView(check("HUD 밝기: 폰 자동 밝기 따르기 (끄면 항상 최대)", "auto_bright", true));
         Button pubBtn = button("단속카메라 공공데이터 키 입력/변경");
         pubBtn.setOnClickListener(v -> askPubKey());
@@ -491,7 +492,6 @@ public class MainActivity extends Activity {
         Button destTest = button("목적지 화면 미리보기");
         destTest.setOnClickListener(v -> startActivity(new Intent(this, DestActivity.class)));
         advanced.addView(destTest);
-        advanced.addView(check("안내판을 HUD 한 가지 색으로 (끄면 티맵 원래 색 그대로)", "white_only", false));
 
         advanced.addView(sub("인터넷 받을 폰 (블루투스 테더링용, 핫스팟을 쓰면 필요 없음)"));
         familyBox = new LinearLayout(this);

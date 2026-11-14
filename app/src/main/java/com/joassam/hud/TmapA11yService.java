@@ -770,8 +770,11 @@ public class TmapA11yService extends AccessibilityService {
     private final Rect coverRect = new Rect();
 
     /** 티맵 미니 창 위에 검은 덮개 (터치는 그대로 통과) */
-    private void showCover(Rect r) {
+    private void showCover(Rect r0) {
         try {
+            // 미니 창 그림자·테두리까지 덮도록 사방으로 넉넉하게 키움
+            int pad = Math.round(14 * getResources().getDisplayMetrics().density);
+            Rect r = new Rect(r0.left - pad, r0.top - pad, r0.right + pad, r0.bottom + pad);
             android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
             android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams(
                     r.width(), r.height(),
@@ -781,6 +784,9 @@ public class TmapA11yService extends AccessibilityService {
                             | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     android.graphics.PixelFormat.OPAQUE);
             lp.gravity = android.view.Gravity.TOP | android.view.Gravity.LEFT;
+            lp.flags |= android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+            if (Build.VERSION.SDK_INT >= 30) // 카메라 구멍·상태 표시줄 때문에 위치가 밀리지 않게
+                lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             lp.x = r.left;
             lp.y = r.top;
             if (cover == null) {
@@ -848,7 +854,7 @@ public class TmapA11yService extends AccessibilityService {
             c = s;
         }
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
-        if (p.getBoolean("white_only", false)) {
+        if (p.getBoolean("white_only", true)) {
             int color = HudActivity.COLORS[p.getInt("color", 0) % HudActivity.COLORS.length];
             int w = c.getWidth(), h = c.getHeight();
             int[] px = new int[w * h];
