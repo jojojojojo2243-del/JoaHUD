@@ -62,12 +62,20 @@ public class TmapA11yService extends AccessibilityService {
             handler.postDelayed(startLoop, 600);
         }
         try {
-            if (event != null && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                    && event.getPackageName() != null) {
-                String pk = event.getPackageName().toString();
+            if (event == null || event.getPackageName() == null) return;
+            String pk = event.getPackageName().toString();
+            int type = event.getEventType();
+            // 티맵을 손으로 만지는 중 (누르기·밀기·글자 입력·창 바뀜)
+            if (pk.equals(TMAP) && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) lastTmapTouch = System.currentTimeMillis();
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 // 키보드·시스템UI·티맵 미니 안내 같은 작은 창은 '앞 화면'으로 치지 않음
                 if (!pk.equals("com.android.systemui") && !pk.contains("inputmethod") && !pk.contains("honeyboard")) {
-                    if (!(pk.equals(TMAP) && findTmapWidget() != null && !tmapFull())) fgPkg = pk;
+                    if (!(pk.equals(TMAP) && findTmapWidget() != null && !tmapFull())) {
+                        String before = fgPkg;
+                        fgPkg = pk;
+                        if (TMAP.equals(before) && !pk.equals(TMAP)) leftTmap(pk);
+                        if (pk.equals(TMAP) && !TMAP.equals(before)) tmapFgSince = System.currentTimeMillis();
+                    }
                 }
             }
         } catch (Throwable ignored) {
@@ -76,6 +84,55 @@ public class TmapA11yService extends AccessibilityService {
 
     /** 지금 맨 앞에 떠 있는 앱 (티맵 화면을 보고 있는지 확인용) */
     static volatile String fgPkg = "";
+
+    // ── 티맵을 만지다가도 HUD로 돌아가기 ──
+    private volatile long lastTmapTouch = 0, tmapFgSince = 0;
+    /** 앱이 일부러 티맵을 여는 동안(미니 창 되살리기·시동 끌 때 종료)은 자동 전환 안 함 */
+    static volatile long selfTmapUntil = 0;
+    private String homePkg = null;
+
+    private boolean guiding() {
+        return NavListenerService.tmapGuiding();
+    }
+
+    private boolean mayReturnToHud() {
+        long now = System.currentTimeMillis();
+        return guiding() && now > autoStartUntil && now > selfTmapUntil
+                && !HudActivity.visible && !DestActivity.visible && !MainActivity.visible && !ParkActivity.visible
+                && AutoService.carState == 0
+                && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("tmap_back_hud", true);
+    }
+
+    /** 길안내 중 티맵에서 홈으로 나감 → 바로 HUD (기다리는 시간 없이) */
+    private void leftTmap(String to) {
+        if (!mayReturnToHud()) return;
+        if (homePkg == null) {
+            try {
+                android.content.pm.ResolveInfo ri = getPackageManager().resolveActivity(
+                        new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                                .addCategory(android.content.Intent.CATEGORY_HOME), 0);
+                homePkg = ri != null && ri.activityInfo != null ? ri.activityInfo.packageName : "";
+            } catch (Throwable t) {
+                homePkg = "";
+            }
+        }
+        boolean home = to.equals(homePkg) || to.contains("launcher");
+        if (!home) return; // 다른 앱으로 간 거면 방해하지 않음
+        handler.postDelayed(() -> {
+            if (!mayReturnToHud() || TMAP.equals(fgPkg)) return;
+            NavListenerService.openHudViaHome(this, "티맵에서 홈으로 나감 → HUD로 돌아감");
+        }, 1200); // 미니 창이 생길 시간
+    }
+
+    /** 길안내 중 티맵 화면을 10초 동안 안 만지면 → 홈 → HUD */
+    private void checkTmapIdle() {
+        if (!TMAP.equals(fgPkg) || !mayReturnToHud()) return;
+        long now = System.currentTimeMillis();
+        if (now - Math.max(lastTmapTouch, tmapFgSince) < 10_000L) return;
+        if (!tmapFull()) return;
+        lastTmapTouch = now; // 한 번만
+        NavListenerService.openHudViaHome(this, "티맵 화면을 10초 동안 안 만짐 → HUD로 돌아감");
+    }
 
     /** 티맵 본 화면이 전체 화면으로 떠 있는지 */
     private boolean tmapFull() {
@@ -108,6 +165,7 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     private void tick() {
+        checkTmapIdle();
         if (!HudActivity.visible) {
             hideCover();
             return;
@@ -584,6 +642,7 @@ public class TmapA11yService extends AccessibilityService {
         android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
         if (t == null) return;
         lastKick = now;
+        selfTmapUntil = now + 5000;
         NavListenerService.log("티맵 미니 창이 없어서 되살리는 중 (티맵 → 홈 → HUD)");
         try {
             startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -620,6 +679,7 @@ public class TmapA11yService extends AccessibilityService {
             if (then != null) then.run();
             return;
         }
+        selfTmapUntil = System.currentTimeMillis() + 20_000L;
         try {
             startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception e) {

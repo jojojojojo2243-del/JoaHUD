@@ -169,6 +169,36 @@ public class NavListenerService extends NotificationListenerService {
         return done;
     }
 
+    private static long guidingCheckedAt = 0;
+    private static boolean guidingCached = false;
+
+    /** 지금 티맵 길안내 알림("경로주행 …")이 떠 있는지 (2초마다 확인) */
+    static boolean tmapGuiding() {
+        long now = System.currentTimeMillis();
+        if (now - guidingCheckedAt < 2000) return guidingCached;
+        guidingCheckedAt = now;
+        boolean g = false;
+        NavListenerService me = instance;
+        if (me != null) {
+            try {
+                for (StatusBarNotification sb : me.getActiveNotifications()) {
+                    if (!TmapA11yService.TMAP.equals(sb.getPackageName())) continue;
+                    NavData d = NavParser.parse(me, sb);
+                    if (d.raw.contains("광고") || d.raw.contains("Android Auto")) continue;
+                    if (d.raw.contains("경로주행") || d.raw.contains("길안내") || !d.dist.isEmpty() || !"NONE".equals(d.dir)) {
+                        g = true;
+                        break;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        } else {
+            g = now - lastGuideSeen < 30_000L;
+        }
+        guidingCached = g;
+        return g;
+    }
+
     /** 시동 끄면서 티맵을 끈 시각 (이때는 '다음 목적지' 안 물음) */
     static volatile long stoppingTmapAt = 0;
     private static long guideStartAt = 0;

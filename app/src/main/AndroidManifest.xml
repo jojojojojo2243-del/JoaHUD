@@ -17,6 +17,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="tmap" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
         <package android:name="com.google.android.projection.gearhead" />
         <provider android:authorities="androidx.car.app.connection" />
     </queries>
