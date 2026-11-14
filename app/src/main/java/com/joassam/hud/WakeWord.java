@@ -294,6 +294,11 @@ final class WakeWord {
             String rest = after(s.replace(" ", ""), w);
             if (rest == null) continue;
             NavListenerService.log("부르는 말 들음: \"" + s + "\"");
+            // "조아야 뒤집어", "조아야 안내 종료" 같은 HUD 명령이면 바로 처리하고 계속 들음
+            if (!rest.isEmpty() && act instanceof HudActivity && ((HudActivity) act).voiceCommand(rest)) {
+                again(1500);
+                return true;
+            }
             stop();
             Intent i = new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (!rest.isEmpty()) i.putExtra("said", rest);

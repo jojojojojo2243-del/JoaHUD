@@ -394,7 +394,7 @@ public class HudView extends View {
 
     /** 미니 창을 뺀 나머지 중 가장 넓은 직사각형 (미니 창이 없거나 가려져 있으면 null) */
     private RectF freeArea(int w, int h) {
-        if (TmapA11yService.miniHidden) return null;
+        // 미니 창을 검은 덮개로 가린 경우에도 덮개 자리는 피해서 그림 (덮개가 HUD 위에 그려져 속도가 가려짐)
         if (System.currentTimeMillis() - TmapA11yService.miniAt > 4000) return null;
         if (!getContext().getSharedPreferences("hud", 0).getBoolean("avoid_mini", true)) return null;
         // 화면 좌표 → 이 뷰 좌표 (뷰가 화면 전체를 덮고, 반전은 가운데 기준)
@@ -406,8 +406,8 @@ public class HudView extends View {
         float r = TmapA11yService.miniR - ox, b = TmapA11yService.miniB - oy;
         if (getScaleX() < 0) { float nl = w - r; r = w - l; l = nl; }
         if (getScaleY() < 0) { float nt = h - b; b = h - t; t = nt; }
-        // 여유 간격
-        float m = Math.min(w, h) * 0.02f;
+        // 여유 간격 (덮개는 미니 창보다 사방으로 coverPad만큼 크므로 그만큼 더)
+        float m = Math.min(w, h) * 0.02f + (TmapA11yService.miniHidden ? TmapA11yService.coverPad : 0);
         l -= m; t -= m; r += m; b += m;
         if (r <= 0 || b <= 0 || l >= w || t >= h) return null; // 화면 밖
         RectF[] cands = {

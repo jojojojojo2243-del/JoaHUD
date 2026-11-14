@@ -115,14 +115,81 @@ public class ParkActivity extends Activity {
         box.addView(t3, new LinearLayout.LayoutParams(-1, -2));
 
         root.addView(box, new FrameLayout.LayoutParams(-1, -1));
+
+        // 가로·세로 고정, 180도 뒤집기 버튼 (화면을 한 번 누르면 10초 동안 보임)
+        bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
+        bar.addView(barButton("자동", () -> setOrient(0)));
+        bar.addView(barButton("가로 고정", () -> setOrient(1)));
+        bar.addView(barButton("세로 고정", () -> setOrient(2)));
+        bar.addView(barButton("↻ 뒤집기", this::toggleFlip));
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        blp.bottomMargin = dp(36);
+        root.addView(bar, blp);
         setContentView(root);
+        applyOrient();
+        showBar();
 
         final long[] lastTap = {0};
         root.setOnClickListener(v -> {
             long now = System.currentTimeMillis();
             if (now - lastTap[0] < 400) finish();
             lastTap[0] = now;
+            showBar();
         });
+    }
+
+    private LinearLayout bar;
+    private final Runnable hideBar = () -> { if (bar != null) bar.setVisibility(View.GONE); };
+
+    private void showBar() {
+        bar.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideBar);
+        handler.postDelayed(hideBar, 10_000L);
+    }
+
+    private TextView barButton(String label, Runnable r) {
+        TextView b = new TextView(this);
+        b.setText(label);
+        b.setTextColor(0xFFAAAAAA);
+        b.setTextSize(15);
+        b.setPadding(dp(14), dp(10), dp(14), dp(10));
+        b.setBackgroundColor(0xFF222222);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(dp(5), 0, dp(5), 0);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(v -> {
+            r.run();
+            showBar();
+        });
+        return b;
+    }
+
+    /** 0 = 폰 방향 따라, 1 = 가로 고정, 2 = 세로 고정 */
+    private void setOrient(int o) {
+        getSharedPreferences("hud", MODE_PRIVATE).edit().putInt("park_orient", o).apply();
+        applyOrient();
+    }
+
+    /** 충전선 방향 때문에 폰을 거꾸로 꽂아도 밖에서 번호가 바로 보이게 180도 돌림 */
+    private void toggleFlip() {
+        android.content.SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        p.edit().putBoolean("park_flip", !p.getBoolean("park_flip", false)).apply();
+        applyOrient();
+    }
+
+    private void applyOrient() {
+        android.content.SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        int o = p.getInt("park_orient", 0);
+        int hudExact = p.getInt("orient_exact", -1); // HUD에서 마지막으로 고정한 정확한 방향
+        int req;
+        if (o == 1) req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+        else if (o == 2) req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        else if (!p.contains("park_orient") && hudExact >= 0) req = hudExact; // 따로 안 골랐으면 HUD와 같은 방향
+        else req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR;
+        setRequestedOrientation(req);
+        box.setRotation(p.getBoolean("park_flip", false) ? 180f : 0f);
     }
 
     @Override
@@ -142,6 +209,7 @@ public class ParkActivity extends Activity {
         } catch (Exception ignored) {
         }
         handler.removeCallbacks(shift);
+        handler.removeCallbacks(hideBar);
     }
 
     /** 전화번호를 화면에 꽉 차게, 절대 잘리지 않게 그리는 뷰 */

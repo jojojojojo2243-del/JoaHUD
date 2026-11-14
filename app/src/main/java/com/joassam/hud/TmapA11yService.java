@@ -38,13 +38,43 @@ public class TmapA11yService extends AccessibilityService {
     private final ExecutorService work = Executors.newSingleThreadExecutor();
     private volatile boolean busy = false;
 
+    private volatile long busySince = 0;
+    private int windowShotFails = 0;
+    private long lastStuckLog = 0;
+
     private final Runnable loop = new Runnable() {
         @Override
         public void run() {
-            tick();
-            handler.postDelayed(this, 700);
+            // 어떤 오류가 나도 반복은 절대 멈추지 않게 (멈추면 HUD 화면이 굳음)
+            try {
+                // 화면 찍기 응답이 3초 넘게 안 오면 기다리지 않고 다시 찍음
+                if (busy && busySince > 0 && System.currentTimeMillis() - busySince > 3000) {
+                    busy = false;
+                    long now = System.currentTimeMillis();
+                    if (now - lastStuckLog > 60_000L) {
+                        lastStuckLog = now;
+                        NavListenerService.log("티맵 화면 찍기 응답 없음 → 다시 찍음");
+                    }
+                }
+                tick();
+            } catch (Throwable t) {
+                busy = false;
+                long now = System.currentTimeMillis();
+                if (now - lastStuckLog > 60_000L) {
+                    lastStuckLog = now;
+                    NavListenerService.log("HUD 갱신 오류 → 계속 진행: " + t);
+                }
+            } finally {
+                handler.removeCallbacks(this);
+                handler.postDelayed(this, 700);
+            }
         }
     };
+
+    /** 찍은 안내판을 HUD에 바로 넘김 (HUD가 없을 때만 예전처럼 UDP로) */
+    private void deliver(Bitmap crop) {
+        if (!HudActivity.deliverFrame(crop)) UdpSender.sendBytes(jpeg(crop));
+    }
 
     @Override
     protected void onServiceConnected() {
@@ -179,7 +209,7 @@ public class TmapA11yService extends AccessibilityService {
         if (scanAndroidAuto()) return;
         // 2순위: 폰 화면 위 티맵 미니 안내판
         final Rect r = findTmapWidget();
-        // HUD가 피해서 그릴 수 있게 미니 창 위치를 알려 줌 (가려서 숨긴 경우는 피할 필요 없음)
+        // HUD가 피해서 그릴 수 있게 미니 창 위치를 알려 줌 (검은 덮개로 가린 경우도 덮개 자리를 피함)
         if (r != null) {
             miniL = r.left; miniT = r.top; miniR = r.right; miniB = r.bottom;
             miniAt = System.currentTimeMillis();
@@ -205,6 +235,7 @@ public class TmapA11yService extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= 34 && widgetId >= 0 && !windowShotFailed
                 && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("hide_mini", true)) {
             busy = true;
+            busySince = System.currentTimeMillis();
             showCover(r);
             try {
                 takeScreenshotOfWindow(widgetId, getMainExecutor(), new TakeScreenshotCallback() {
@@ -224,7 +255,8 @@ public class TmapA11yService extends AccessibilityService {
                                     Bitmap crop = process(full, all);
                                     full.recycle();
                                     if (crop != null) {
-                                        UdpSender.sendBytes(jpeg(crop));
+                                        deliver(crop);
+                                        windowShotFails = 0;
                                         status = "티맵 안내판 표시 중 (미니 창 숨김)";
                                     }
                                 }
@@ -241,6 +273,9 @@ public class TmapA11yService extends AccessibilityService {
                     public void onFailure(int code) {
                         busy = false;
                         if (code == 3) return; // 간격 짧음
+                        // 티맵이 미니 창을 새로 만들면 한두 번 실패할 수 있음 → 창을 다시 찾아 재시도, 계속 실패할 때만 포기
+                        widgetId = -1;
+                        if (++windowShotFails < 8) return;
                         windowShotFailed = true;
                         hideCover();
                         NavListenerService.log("미니 창 따로 찍기 불가(코드 " + code + ") → 기존 방식(미니 창 보임)");
@@ -256,6 +291,7 @@ public class TmapA11yService extends AccessibilityService {
         }
         hideCover();
         busy = true;
+            busySince = System.currentTimeMillis();
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
                 @Override
@@ -272,7 +308,7 @@ public class TmapA11yService extends AccessibilityService {
                             }
                             hb.close();
                             if (crop != null) {
-                                UdpSender.sendBytes(jpeg(crop));
+                                deliver(crop);
                                 status = "티맵 안내판 표시 중";
                             }
                         } catch (Throwable t) {
@@ -487,6 +523,7 @@ public class TmapA11yService extends AccessibilityService {
         if (aaShotFailed || busy || now - lastAaShot < 1100) return;
         lastAaShot = now;
         busy = true;
+            busySince = System.currentTimeMillis();
         try {
             takeScreenshot(displayId, getMainExecutor(), new TakeScreenshotCallback() {
                 @Override
@@ -664,14 +701,24 @@ public class TmapA11yService extends AccessibilityService {
      * 티맵이 실제로 꺼질 때까지 기다린 뒤 홈 → then 실행 (최대 15초)
      */
     static void endGuidance(Runnable then) {
+        endGuidance(then, true);
+    }
+
+    /** closeApp=false: 길안내만 끝내고 티맵은 남겨 둠 (음성 "안내 종료") */
+    static void endGuidance(Runnable then, boolean closeApp) {
         TmapA11yService a = instance;
         if (a == null) {
             NavListenerService.log("티맵 종료 못 함: 접근성(안내판 읽기)이 꺼져 있음");
             if (then != null) then.run();
             return;
         }
+        a.closeApp = closeApp;
         a.doEndGuidance(then);
     }
+
+    private volatile boolean closeApp = true;
+    private static final String[] GUIDE_END_WORDS = {"안내 종료", "길안내 종료", "경로 안내 종료", "주행 종료"};
+    private static final String[] GUIDE_CONFIRM_WORDS = {"안내 종료", "종료", "확인", "예"};
 
     private void doEndGuidance(Runnable then) {
         android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
@@ -695,14 +742,14 @@ public class TmapA11yService extends AccessibilityService {
             public void run() {
                 long now = System.currentTimeMillis();
                 if (stage[0] == 0) {
-                    String hit = clickWord(END_WORDS);
+                    String hit = clickWord(closeApp ? END_WORDS : GUIDE_END_WORDS);
                     if (hit != null) {
-                        NavListenerService.log("시동 꺼짐 → 티맵 [" + hit + "] 누름");
+                        NavListenerService.log("티맵 종료 → [" + hit + "] 누름");
                         stage[0] = norm(hit).contains("앱") || norm(hit).contains("티맵") || norm(hit).contains("TMAP") ? 2 : 1;
                         stageAt[0] = now;
                     }
                 } else if (stage[0] == 1) {
-                    String hit = clickWord(CONFIRM_WORDS);
+                    String hit = clickWord(closeApp ? CONFIRM_WORDS : GUIDE_CONFIRM_WORDS);
                     if (hit != null) {
                         NavListenerService.log("티맵 확인 창 [" + hit + "] 누름");
                         stage[0] = 2;
@@ -722,12 +769,13 @@ public class TmapA11yService extends AccessibilityService {
                     else if (gone[0] >= 2) NavListenerService.log("티맵 완전히 꺼짐");
                     performGlobalAction(GLOBAL_ACTION_HOME);
                     // 길안내만 끝나고 티맵이 남아 있으면 뒤에서 정리
-                    handler.postDelayed(() -> {
+                    if (closeApp) handler.postDelayed(() -> {
                         try {
                             ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).killBackgroundProcesses(TMAP);
                         } catch (Throwable ignored) {
                         }
                     }, 1500);
+                    closeApp = true;
                     if (then != null) handler.postDelayed(then, 900);
                     return;
                 }
@@ -823,6 +871,8 @@ public class TmapA11yService extends AccessibilityService {
 
     /** 미니 창을 덮개로 가렸는지 (가렸으면 피할 필요 없음) */
     static volatile boolean miniHidden = false;
+    /** 검은 덮개가 미니 창보다 사방으로 더 큰 만큼(픽셀) — HUD가 이만큼 더 피해서 그림 */
+    static volatile int coverPad = 0;
 
     private int widgetId = -1;
     private volatile boolean windowShotFailed = false;
@@ -834,6 +884,7 @@ public class TmapA11yService extends AccessibilityService {
         try {
             // 미니 창 그림자·테두리까지 덮도록 사방으로 넉넉하게 키움
             int pad = Math.round(14 * getResources().getDisplayMetrics().density);
+            coverPad = pad;
             Rect r = new Rect(r0.left - pad, r0.top - pad, r0.right + pad, r0.bottom + pad);
             android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
             android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams(

@@ -176,15 +176,46 @@ public class HudActivity extends Activity {
     };
     private Button btnAuto, btnLand, btnPort;
 
+    /**
+     * 가로/세로 고정: 누른 순간의 '정확한 방향'(정방향·거꾸로)까지 기억해서 껐다 켜도 똑같이 나옴.
+     * 폰을 대시보드에 눕혀 두면 센서가 방향을 헷갈려 켤 때마다 뒤집히던 문제 해결.
+     * 같은 고정 버튼을 한 번 더 누르면 180도 돌림 (충전선 방향 바꿔 꽂았을 때).
+     */
     private void setOrient(int o) {
-        prefs.edit().putInt("orient_mode", o).apply();
+        int prev = prefs.getInt("orient_mode", 0);
+        int exact = -1;
+        String name = ORIENT_NAMES[o];
+        if (o == 1 || o == 2) {
+            int saved = prefs.getInt("orient_exact", -1);
+            boolean savedFits = o == 1 ? (saved == LAND || saved == LAND_R) : (saved == PORT || saved == PORT_R);
+            if (prev == o && savedFits) {
+                exact = o == 1 ? (saved == LAND ? LAND_R : LAND) : (saved == PORT ? PORT_R : PORT);
+                name += " (180도 돌림)";
+            } else {
+                int rot = 0;
+                try {
+                    rot = getWindowManager().getDefaultDisplay().getRotation();
+                } catch (Throwable ignored) {
+                }
+                // rotation: 0 세로, 1 가로(왼쪽으로 눕힘), 2 세로 거꾸로, 3 가로 거꾸로
+                exact = o == 1 ? (rot == 3 ? LAND_R : LAND) : (rot == 2 ? PORT_R : PORT);
+            }
+        }
+        prefs.edit().putInt("orient_mode", o).putInt("orient_exact", exact).apply();
         applyOrientation();
-        android.widget.Toast.makeText(this, "화면 방향: " + ORIENT_NAMES[o], android.widget.Toast.LENGTH_SHORT).show();
+        android.widget.Toast.makeText(this, "화면 방향: " + name, android.widget.Toast.LENGTH_SHORT).show();
     }
+
+    private static final int LAND = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+            LAND_R = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
+            PORT = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+            PORT_R = 9; // SCREEN_ORIENTATION_REVERSE_PORTRAIT
 
     private void applyOrientation() {
         int o = prefs.getInt("orient_mode", 0) % ORIENT_VALUES.length;
-        setRequestedOrientation(ORIENT_VALUES[o]);
+        int exact = prefs.getInt("orient_exact", -1);
+        boolean fits = (o == 1 && (exact == LAND || exact == LAND_R)) || (o == 2 && (exact == PORT || exact == PORT_R));
+        setRequestedOrientation(fits ? exact : ORIENT_VALUES[o]);
         Button[] bs = {btnAuto, btnLand, btnPort};
         for (int i = 0; i < bs.length; i++) {
             if (bs[i] == null) continue;
@@ -225,6 +256,137 @@ public class HudActivity extends Activity {
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         }
+    }
+
+    // ───────── 음성 명령 ("조아야" + 명령) ─────────
+    private android.speech.tts.TextToSpeech tts;
+    private boolean ttsReady = false;
+
+    private void say(String msg) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show();
+        try {
+            if (tts == null) {
+                tts = new android.speech.tts.TextToSpeech(this, st -> {
+                    ttsReady = st == android.speech.tts.TextToSpeech.SUCCESS;
+                    if (ttsReady) {
+                        tts.setLanguage(java.util.Locale.KOREAN);
+                        tts.speak(msg, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "cmd");
+                    }
+                });
+            } else if (ttsReady) {
+                tts.speak(msg, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "cmd");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 티맵을 잠깐 열어 버튼을 누른 뒤 다시 HUD로 */
+    private Runnable backToHud() {
+        final android.content.Context app = getApplicationContext();
+        return () -> {
+            try {
+                app.startActivity(new android.content.Intent(app, HudActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception ignored) {
+            }
+        };
+    }
+
+    private static boolean has(String s, String... words) {
+        for (String w : words) if (s.contains(w)) return true;
+        return false;
+    }
+
+    /**
+     * "조아야" 다음에 한 말이 HUD 명령이면 실행하고 true.
+     * 명령이 아니면 false → 목적지로 봄.
+     */
+    boolean voiceCommand(String said) {
+        String s = said.replace(" ", "").replace(".", "").toUpperCase(java.util.Locale.ROOT);
+        String cmd = null;
+        // ── 티맵 ──
+        if (has(s, "티맵꺼", "티맵종료", "티맵닫", "티맵끄", "내비꺼", "내비종료", "네비꺼", "네비종료")) {
+            cmd = "티맵을 끌게요";
+            TmapA11yService.endGuidance(backToHud(), true);
+        } else if (has(s, "안내종료", "안내꺼", "안내끄", "안내그만", "길안내종료", "안내중지", "안내취소")) {
+            cmd = "길안내를 끝낼게요";
+            TmapA11yService.endGuidance(backToHud(), false);
+        } else if (has(s, "경로다시", "재탐색", "다시탐색", "경로재검색", "경로재탐색", "길다시", "다시안내", "경로새로")) {
+            if (DestActivity.reroute(this)) cmd = "경로를 다시 찾을게요";
+            else cmd = "다시 안내할 목적지가 없어요";
+        } else if (has(s, "목적지바꿔", "목적지변경", "목적지바꾸", "다른곳", "목적지다시", "어디로")) {
+            cmd = "어디로 갈까요";
+            startActivity(new android.content.Intent(this, DestActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            NavListenerService.log("음성 명령: " + said + " → 목적지 바꾸기");
+            return true;
+        }
+        // ── HUD 켜고 끄기 ──
+        else if (has(s, "다시시작", "재시작", "새로고침", "HUD다시", "허드다시", "에이치유디다시")) {
+            cmd = "HUD를 다시 시작할게요";
+            android.content.Intent i = new android.content.Intent(this, HudActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            finish();
+            handler.postDelayed(() -> getApplicationContext().startActivity(i), 600);
+        } else if (has(s, "HUD꺼", "HUD종료", "HUD끄", "HUD닫", "허드꺼", "허드종료", "에이치유디꺼", "에이치유디종료", "화면꺼", "화면종료", "화면닫")) {
+            cmd = "HUD를 끌게요";
+            handler.postDelayed(this::finish, 1200);
+        }
+        // ── 화면 조정 ──
+        else if (has(s, "가로고정", "가로로", "가로화면", "가로모드")) {
+            setOrient(1);
+            cmd = "가로로 고정했어요";
+        } else if (has(s, "세로고정", "세로로", "세로화면", "세로모드")) {
+            setOrient(2);
+            cmd = "세로로 고정했어요";
+        } else if (has(s, "자동회전", "자동으로돌", "회전자동")) {
+            setOrient(0);
+            cmd = "자동 회전으로 바꿨어요";
+        } else if (has(s, "뒤집어", "뒤집기", "거꾸로", "180도", "반대로돌", "돌려")) {
+            int o = prefs.getInt("orient_mode", 0);
+            if (o == 1 || o == 2) setOrient(o); // 고정 중이면 180도 돌림
+            else {
+                prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false))
+                        .putBoolean("mirror_h", !prefs.getBoolean("mirror_h", true)).apply();
+                applyMirror();
+            }
+            cmd = "화면을 뒤집었어요";
+        } else if (has(s, "좌우반전", "좌우바꿔", "좌우뒤집", "거울")) {
+            prefs.edit().putBoolean("mirror_h", !prefs.getBoolean("mirror_h", true)).apply();
+            applyMirror();
+            cmd = "좌우를 바꿨어요";
+        } else if (has(s, "상하반전", "위아래바꿔", "위아래뒤집", "상하바꿔")) {
+            prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false)).apply();
+            applyMirror();
+            cmd = "위아래를 바꿨어요";
+        } else if (has(s, "색바꿔", "색깔", "색상", "색변경", "다른색")) {
+            int c = (prefs.getInt("color", 0) + 1) % COLORS.length;
+            prefs.edit().putInt("color", c).apply();
+            hud.setColor(COLORS[c]);
+            cmd = "색을 바꿨어요";
+        } else if (has(s, "크게", "키워")) {
+            int i = Math.min(prefs.getInt("speed_size", 1) + 1, SPEED_SCALES.length - 1);
+            prefs.edit().putInt("speed_size", i).apply();
+            hud.setSpeedScale(SPEED_SCALES[i]);
+            cmd = "속도 크기 " + SPEED_NAMES[i];
+        } else if (has(s, "작게", "줄여")) {
+            int i = Math.max(prefs.getInt("speed_size", 1) - 1, 0);
+            prefs.edit().putInt("speed_size", i).apply();
+            hud.setSpeedScale(SPEED_SCALES[i]);
+            cmd = "속도 크기 " + SPEED_NAMES[i];
+        }
+        if (cmd == null) return false;
+        NavListenerService.log("음성 명령: \"" + said + "\" → " + cmd);
+        say(cmd);
+        return true;
+    }
+
+    /** 같은 폰 안에서 찍은 티맵 안내판을 바로 넘겨받음 (UDP·JPEG 거치지 않아 끊김 없음) */
+    static boolean deliverFrame(Bitmap b) {
+        HudActivity a = current != null ? current.get() : null;
+        if (a == null || a.isFinishing() || a.hud == null) return false;
+        a.runOnUiThread(() -> a.hud.setFrame(b));
+        return true;
     }
 
     private void startReceiver() {
@@ -312,6 +474,10 @@ public class HudActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        try {
+            if (tts != null) tts.shutdown();
+        } catch (Exception ignored) {
+        }
         running = false;
         handler.removeCallbacksAndMessages(null);
         try {

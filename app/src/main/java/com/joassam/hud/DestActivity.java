@@ -542,6 +542,23 @@ public class DestActivity extends Activity {
         return null;
     }
 
+    /** 음성 "경로 다시": 마지막 목적지로 티맵 길안내를 다시 시작 */
+    static boolean reroute(android.content.Context c) {
+        android.content.SharedPreferences sp = c.getSharedPreferences("hud", MODE_PRIVATE);
+        String u = sp.getString("last_route_url", "");
+        if (u.isEmpty()) return false;
+        try {
+            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 30_000L;
+            NavListenerService.destFlowAt = System.currentTimeMillis();
+            c.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)).setPackage(TmapA11yService.TMAP)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            NavListenerService.log("음성 → '" + sp.getString("last_route_name", "") + "' 경로 다시 안내");
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void openTmap(String dest, String label, double[] ll) {
         NavListenerService.destFlowAt = System.currentTimeMillis();
         String enc = Uri.encode(dest);
@@ -553,6 +570,7 @@ public class DestActivity extends Activity {
             urls.add("tmap://route?goalname=" + n + "&goalx=" + ll[1] + "&goaly=" + ll[0]
                     + "&rGoName=" + n + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
             TmapA11yService.autoStartUntil = System.currentTimeMillis() + 30_000L; // [안내] 버튼 자동 누르기
+            p.edit().putString("last_route_url", urls.get(0)).putString("last_route_name", label).apply();
         }
         urls.add("tmap://search?name=" + enc);
         for (String u : urls) {
