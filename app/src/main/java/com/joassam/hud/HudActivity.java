@@ -141,7 +141,7 @@ public class HudActivity extends Activity {
             int i = (prefs.getInt("speed_size", 1) + 1) % SPEED_SCALES.length;
             prefs.edit().putInt("speed_size", i).apply();
             hud.setSpeedScale(SPEED_SCALES[i]);
-            android.widget.Toast.makeText(this, "속도 크기: " + SPEED_NAMES[i], android.widget.Toast.LENGTH_SHORT).show();
+            if (!quiet) android.widget.Toast.makeText(this, "속도 크기: " + SPEED_NAMES[i], android.widget.Toast.LENGTH_SHORT).show();
         }));
         btnAuto = ctrl("🔄 자동회전", v -> setOrient(0));
         btnLand = ctrl("▭ 가로", v -> setOrient(1));
@@ -203,7 +203,7 @@ public class HudActivity extends Activity {
         }
         prefs.edit().putInt("orient_mode", o).putInt("orient_exact", exact).apply();
         applyOrientation();
-        android.widget.Toast.makeText(this, "화면 방향: " + name, android.widget.Toast.LENGTH_SHORT).show();
+        if (!quiet) android.widget.Toast.makeText(this, "화면 방향: " + name, android.widget.Toast.LENGTH_SHORT).show();
     }
 
     private static final int LAND = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
@@ -263,7 +263,7 @@ public class HudActivity extends Activity {
     private boolean ttsReady = false;
 
     private void say(String msg) {
-        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show();
+        // 음성 명령 결과는 소리로만 (앞유리에 글자 안 띄움)
         try {
             if (tts == null) {
                 tts = new android.speech.tts.TextToSpeech(this, st -> {
@@ -301,7 +301,19 @@ public class HudActivity extends Activity {
      * "조아야" 다음에 한 말이 HUD 명령이면 실행하고 true.
      * 명령이 아니면 false → 목적지로 봄.
      */
+    /** 음성으로 조작 중이면 화면 알림(Toast)을 띄우지 않음 */
+    private boolean quiet = false;
+
     boolean voiceCommand(String said) {
+        quiet = true;
+        try {
+            return voiceCommand0(said);
+        } finally {
+            quiet = false;
+        }
+    }
+
+    private boolean voiceCommand0(String said) {
         String s = said.replace(" ", "").replace(".", "").toUpperCase(java.util.Locale.ROOT);
         String cmd = null;
         // ── 티맵 ──

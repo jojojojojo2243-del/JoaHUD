@@ -258,7 +258,19 @@ public class DestActivity extends Activity {
     }
 
     /** 들은 말 처리 */
+    /** "그냥 가", "HUD", "없어" 같은 말: 목적지 없이 바로 HUD */
+    static boolean hudOnlyWord(String a) {
+        String s = a.replace(" ", "").toUpperCase(java.util.Locale.ROOT);
+        if (s.length() > 10) return false;
+        return s.matches(".*(그냥가|그냥|바로가|바로HUD|HUD|허드|에이치유디|헤드업|목적지없|안내없이|없어|없습니다|없음|됐어|아니|괜찮아|안가|그만).*");
+    }
+
     private void heard(List<String> alts) {
+        if (!nextMode && choices == null && hudOnlyWord(alts.get(0))) {
+            NavListenerService.log("음성 '" + alts.get(0) + "' → 목적지 없이 HUD");
+            speak("목적지 없이 HUD를 켤게요", this::openHudOnly);
+            return;
+        }
         if (nextMode && choices == null) {
             String a0 = alts.get(0).replace(" ", "");
             if (a0.matches(".*(없어|없습니다|아니|됐어|괜찮아|그만|끝|안가|없음).*") && a0.length() <= 8) {
@@ -405,13 +417,19 @@ public class DestActivity extends Activity {
                     public void onError(int e) {
                         boolean nothing = e == android.speech.SpeechRecognizer.ERROR_NO_MATCH
                                 || e == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
-                        if (nothing && silent < 2) {
+                        if (nothing && silent < 1) {
                             // 아무 말도 못 들음 → 묻지 않고 조용히 다시 듣기 (최대 2번)
                             silent++;
                             handler.postDelayed(DestActivity.this::listen, 300);
                             return;
                         }
                         silent = 0;
+                        if (nothing && !nextMode && choices == null) {
+                            // 목적지를 말하지 않음 → 묻지 않고 바로 HUD
+                            NavListenerService.log("목적지 말 없음 → 바로 HUD");
+                            speak("목적지 없이 HUD를 켤게요", DestActivity.this::openHudOnly);
+                            return;
+                        }
                         if (!nothing) NavListenerService.log("음성 인식 오류 " + e + " → 구글 창으로");
                         if (e == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
                                 || e == android.speech.SpeechRecognizer.ERROR_CLIENT) {

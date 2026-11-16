@@ -194,8 +194,27 @@ public class TmapA11yService extends AccessibilityService {
         super.onDestroy();
     }
 
+    private long lastPopupCheck = 0;
+
+    /** 운전 중 티맵에 뜨는 오류·안내 창(인터넷 끊김, 지도 갱신 등)을 앱이 대신 닫음 → 손댈 일 없게 */
+    private void closeTmapPopups() {
+        long now = System.currentTimeMillis();
+        if (now - lastPopupCheck < 2000) return;
+        lastPopupCheck = now;
+        if (now < selfTmapUntil) return; // 시동 끌 때 종료 중엔 건드리지 않음
+        if (!HudActivity.visible && !guiding()) return;
+        if (TMAP.equals(fgPkg) && now - lastTmapTouch < 4000) return; // 사람이 티맵을 만지는 중이면 건드리지 않음
+        String[] cause = {"네트워크", "인터넷", "통신", "연결 상태", "연결이", "서버", "리소스", "갱신", "일시적", "오류", "다시 시도"};
+        String why = null;
+        for (String w : cause) if (tmapTextShown(w)) { why = w; break; }
+        if (why == null) return;
+        String hit = clickWord(new String[]{"확인", "닫기", "재시도", "다시 시도", "다시시도"});
+        if (hit != null) NavListenerService.log("티맵 알림 창 자동으로 닫음 (" + why + ", [" + hit + "])");
+    }
+
     private void tick() {
         checkTmapIdle();
+        closeTmapPopups();
         if (!HudActivity.visible) {
             hideCover();
             return;

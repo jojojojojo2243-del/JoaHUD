@@ -76,10 +76,41 @@ public final class Alerts {
     private static int secStartIdx = -1;
     private static int secLength = 0;       // 이 구간 길이(m), 0 = 모름
 
-    /** 구간단속 남은 거리(m), 모르면 -1 */
+    private static int secEndIdx = -1;      // 짝이 되는 종점 카메라 (못 찾으면 -1)
+    private static float secEndMin = 1e9f;  // 종점 카메라까지 가장 가까웠던 거리
+
+    /** 구간단속 종점까지 남은 거리(m), 모르면 -1 */
     static int sectionRemain() {
-        if (!inSection || secLength <= 0) return -1;
-        return (int) Math.max(0, secLength - secDist);
+        if (!inSection) return -1;
+        if (secLength > 0) return (int) Math.max(0, secLength - secDist);
+        if (secEndIdx >= 0 && hasLast) {
+            float[] r = new float[1];
+            Location.distanceBetween(lastLat, lastLon, lat[secEndIdx], lon[secEndIdx], r);
+            return Math.round(r[0]); // 직선거리라 실제보다 조금 짧을 수 있음
+        }
+        return -1;
+    }
+
+    /** 시점 카메라에서 진행 방향으로 짝이 되는 종점 카메라 찾기 */
+    private static int findEnd(int start) {
+        int best = -1;
+        float bestScore = Float.MAX_VALUE;
+        float[] r = new float[2];
+        double box = 0.25; // 약 25km
+        for (int i = 0; i < count; i++) {
+            if ((flags[i] & F_SEC_END) == 0 || i == start) continue;
+            if (Math.abs(lat[i] - lat[start]) > box || Math.abs(lon[i] - lon[start]) > box * 1.25) continue;
+            Location.distanceBetween(lat[start], lon[start], lat[i], lon[i], r);
+            if (r[0] < 300 || r[0] > 25000) continue;
+            if (heading >= 0 && angle(heading, r[1]) > 70) continue; // 뒤쪽·옆쪽 종점은 아님
+            if (limit[start] > 0 && limit[i] > 0 && limit[start] != limit[i]) continue;
+            float score = secLength > 0 ? Math.abs(r[0] - secLength * 0.9f) : r[0];
+            if (score < bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        return best;
     }
 
     /** 구간단속 중 평균속도(km/h), 구간 밖이면 -1 */
@@ -104,6 +135,8 @@ public final class Alerts {
             secStartIdx = idx;
             secLength = secLen[idx];
             sectionLimit = limit[idx];
+            secEndIdx = findEnd(idx);
+            secEndMin = 1e9f;
             NavListenerService.log("구간단속 시작 (제한 " + sectionLimit
                     + (secLength > 0 ? ", 길이 " + String.format(java.util.Locale.ROOT, "%.1f", secLength / 1000f) + "km" : "") + ")");
         } else if (idx != secStartIdx && secDist > 300 && (isEnd || !isStart)) {
@@ -392,6 +425,13 @@ public final class Alerts {
             float[] dd = new float[1];
             Location.distanceBetween(lastLat, lastLon, la, lo, dd);
             if (dd[0] < 200) secDist += dd[0]; // GPS 튐 무시
+            // 짝 종점 카메라를 지나면 끝 (가장 가까웠다가 다시 멀어짐)
+            if (secEndIdx >= 0) {
+                float[] de = new float[1];
+                Location.distanceBetween(la, lo, lat[secEndIdx], lon[secEndIdx], de);
+                if (de[0] < secEndMin) secEndMin = de[0];
+                else if (secEndMin < 120 && de[0] > secEndMin + 40) endSection("종점 지남");
+            }
             // 종점 카메라를 못 잡은 경우 안전장치: 구간 길이 + 1km, 길이를 모르면 30km 또는 40분
             if (secLength > 0 && secDist > secLength + 1000) endSection("구간 길이 지남");
             else if (secDist > 30000 || System.currentTimeMillis() - secStart > 40 * 60_000L) endSection("너무 오래 지남");
@@ -406,6 +446,14 @@ public final class Alerts {
             Location.distanceBetween(la, lo, lat[lockIdx], lon[lockIdx], res);
             float d = res[0];
             float diff = angle(heading, res[1]);
+            // 구간단속 시점: 카메라 바로 앞(60m)에 오면 지나칠 때까지 기다리지 않고 바로 시작
+            if (!inSection && d < 60 && (flags[lockIdx] & F_SEC_START) != 0) passed(lockIdx);
+            // 옆 도로 카메라(학교 옆길 등): 가까워질수록 옆으로 벌어지면 경고 취소
+            if (d > 60 && diff < 90 && side(d, diff) > sideLimit(d)) {
+                lockIdx = -1;
+                current = null;
+                return;
+            }
             if (d < 40 || (d > lockDist + 30 && diff > 90) || d > 1000) {
                 if (lockDist < 150 && d <= 1000) passed(lockIdx); // 실제로 카메라 옆을 지나감
                 lockIdx = -1; // 지나침
@@ -426,8 +474,10 @@ public final class Alerts {
             if (Math.abs(lat[i] - la) > box || Math.abs(lon[i] - lo) > box * 1.25) continue;
             Location.distanceBetween(la, lo, lat[i], lon[i], res);
             if (res[0] > 800 || res[0] < 30) continue;
-            // 진행 방향 앞쪽(±25°)에 있는 것만
-            if (angle(heading, res[1]) > 25) continue;
+            // 진행 방향 앞쪽(±25°)이면서, 내 길에서 옆으로 많이 벗어나지 않은 것만 (옆 도로 카메라 제외)
+            float df = angle(heading, res[1]);
+            if (df > 25) continue;
+            if (side(res[0], df) > sideLimit(res[0])) continue;
             if (res[0] < bestD) {
                 bestD = res[0];
                 best = i;
@@ -440,6 +490,16 @@ public final class Alerts {
         } else {
             current = null;
         }
+    }
+
+    /** 진행 방향에서 옆으로 벌어진 거리(m) */
+    private static float side(float d, float diffDeg) {
+        return (float) (d * Math.sin(Math.toRadians(Math.min(diffDeg, 90))));
+    }
+
+    /** 옆으로 이만큼까지는 같은 길로 봄: 가까이선 35m, 멀리선 길이 휘어 있을 수 있어 조금 더 */
+    private static float sideLimit(float d) {
+        return Math.max(35f, d * 0.10f);
     }
 
     private static Hit hit(int i, float d) {

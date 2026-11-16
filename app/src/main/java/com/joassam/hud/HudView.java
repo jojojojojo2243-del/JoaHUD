@@ -102,7 +102,8 @@ public class HudView extends View {
         stroke.setColor(color);
         fill.setColor(color);
 
-        boolean hasFrame = frame != null && now - lastFrame < 2500;
+        // 인터넷·화면 찍기가 잠깐 끊겨도 마지막 안내판을 15초 동안 그대로 보여 줌 (깜빡임·빈 화면 방지)
+        boolean hasFrame = frame != null && now - lastFrame < 15_000;
 
         // ── 가로 화면: 순정 HUD 스타일 (왼쪽 회전안내 · 가운데 큰 속도 · 위 시계) ──
         // 티맵 미니 창이 화면에 있으면 그 자리를 피해서, 남은 가장 넓은 빈 곳에 HUD 전체를 그림
@@ -153,8 +154,8 @@ public class HudView extends View {
             text.setColor(Color.GRAY);
             text.setTextAlign(Paint.Align.CENTER);
             text.setTextSize(Math.min(w, h) * 0.06f);
-            String msg = lastRecv == 0 ? "메인폰 신호 기다리는 중…" : (stale ? "신호 끊김" : "길안내 없음");
-            c.drawText(msg + "   " + clock.format(new Date()), w / 2f, h * 0.82f, text);
+            // 앞유리엔 상태 문구를 띄우지 않음 (운전 중 눈길 뺏지 않게) — 시계만
+            c.drawText(clock.format(new Date()), w / 2f, h * 0.82f, text);
             return;
         }
 
@@ -199,7 +200,8 @@ public class HudView extends View {
         float splitX = w * 0.60f;          // 왼쪽 안내 영역 끝 (안내판 크게)
         float speedCx = w * 0.80f;         // 속도 가운데
         float speedSize = Math.min(h * 0.36f * speedScale / 1.8f, h * 0.50f);
-        float speedBase = h * 0.56f;       // 오른쪽 아래 구석은 티맵 미니 창 자리로 비움
+        // 속도 숫자는 오른쪽 칸 아래쪽에 — 위쪽 줄은 제한속도·단속카메라 표시 자리 (겹치지 않게)
+        float speedBase = Math.min(h * 0.43f + speedSize * 0.74f, h * 0.84f) - speedSize * 0.35f;
 
         if (hasFrame) {
             // 차량 화면에서 잘라온 안내 카드를 왼쪽에
@@ -250,13 +252,8 @@ public class HudView extends View {
             color = saved;
             stroke.setColor(color);
             fill.setColor(color);
-        } else {
-            text.setTextAlign(Paint.Align.LEFT);
-            text.setColor(Color.GRAY);
-            text.setTextSize(h * 0.08f);
-            String msg = lastRecv == 0 ? "신호 기다리는 중" : (stale ? "신호 끊김" : "길안내 없음");
-            c.drawText(msg, pad, h * 0.55f, text);
         }
+        // 안내가 없을 때 "신호 끊김" 같은 문구는 앞유리에 띄우지 않음
 
         // 가운데 큰 속도
         text.setTextAlign(Paint.Align.CENTER);
@@ -266,11 +263,12 @@ public class HudView extends View {
         c.drawText(v, speedCx, speedBase + speedSize * 0.35f, text);
 
         // 단속·위험 안내 문구가 있으면 오른쪽에 주황 삼각형 경고
-        if (guiding && nav.limit > 0) drawLimit(c, w * 0.66f, h * 0.24f, h * 0.10f);
-        if (guiding && nav.sdiDist > 0) drawCamera(c, w * 0.66f, h * 0.56f, h * 0.17f);
+        float[] sl = landSlots(w, h);
+        if (guiding && nav.limit > 0) drawLimit(c, sl[0], sl[1], sl[2]);
+        if (guiding && nav.sdiDist > 0) drawCamera(c, sl[3], sl[4], sl[5]);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
         if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
-            float tx = w * 0.66f, ty = h * 0.45f, ts = h * 0.22f;
+            float tx = sl[3], ty = sl[4], ts = sl[5];
             Path tri = new Path();
             tri.moveTo(tx, ty - ts * 0.55f);
             tri.lineTo(tx + ts * 0.55f, ty + ts * 0.45f);
@@ -289,8 +287,23 @@ public class HudView extends View {
         if (guiding && !hasFrame && nav.sub != null && !nav.sub.isEmpty()) {
             text.setColor(Color.LTGRAY);
             text.setTextAlign(Paint.Align.CENTER);
-            fitText(c, "◉ " + nav.sub, speedCx, h * 0.72f, w - splitX - pad, h * 0.07f);
+            fitText(c, "◉ " + nav.sub, speedCx, h * 0.95f, w - splitX - pad, h * 0.06f);
         }
+    }
+
+    /**
+     * 가로 HUD 오른쪽 칸의 위쪽 줄: [제한속도 원] [단속카메라 삼각형]
+     * 속도 숫자는 그 아래라서 서로 겹치지 않음.
+     * 반환: limX, limY, limR, camX, camY, camS
+     */
+    private float[] landSlots(int w, int h) {
+        float splitX = w * 0.60f;
+        float rowY = h * 0.28f;
+        float limR = h * 0.085f;
+        float camS = h * 0.13f;
+        float limX = splitX + h * 0.06f + limR;
+        float camX = limX + limR + h * 0.05f + camS * 0.55f;
+        return new float[]{limX, rowY, limR, camX, rowY - camS * 0.05f, camS};
     }
 
     /**
@@ -334,12 +347,8 @@ public class HudView extends View {
             text.setTextAlign(Paint.Align.CENTER);
             text.setColor(Color.WHITE);
             fitText(c, line, cx, hasArrow ? h * 0.33f : h * 0.25f, w - 2 * pad, w * 0.10f);
-        } else {
-            text.setTextAlign(Paint.Align.CENTER);
-            text.setColor(Color.GRAY);
-            text.setTextSize(w * 0.065f);
-            c.drawText(lastRecv == 0 ? "신호 기다리는 중" : (stale ? "신호 끊김" : "길안내 없음"), cx, h * 0.22f, text);
         }
+        // 안내가 없을 때 "신호 끊김" 같은 문구는 앞유리에 띄우지 않음
 
         // ── 아래: 큰 속도 ──
         float sp = Math.min(w * 0.24f * speedScale / 1.8f + w * 0.06f, w * 0.38f);
@@ -451,9 +460,10 @@ public class HudView extends View {
         if (a == null) return;
         float limX, limY, limR, camX, camY, camS, labX, labY, labS;
         if (landscape) {
-            limX = w * 0.66f; limY = h * 0.24f; limR = h * 0.10f;
-            camX = w * 0.66f; camY = h * 0.56f; camS = h * 0.17f;
-            labX = w * 0.80f; labY = h * 0.72f; labS = h * 0.075f;
+            float[] sl = landSlots(w, h);
+            limX = sl[0]; limY = sl[1]; limR = sl[2];
+            camX = sl[3]; camY = sl[4]; camS = sl[5];
+            labX = w * 0.80f; labY = h * 0.96f; labS = h * 0.065f; // 맨 아래 (속도 숫자 밑)
         } else {
             float sp = Math.min(w * 0.24f * speedScale / 1.8f + w * 0.06f, w * 0.38f);
             float sy = h * 0.70f, pad = w * 0.05f;
@@ -476,9 +486,9 @@ public class HudView extends View {
         nav.limit = keepLimit;
         nav.sdiDist = keepDist;
         if (temp) nav = null;
-        if ((a.school || a.section) && Alerts.sectionAvg() < 0) {
-            String label = a.school ? "어린이보호구역"
-                    : a.secEnd && !a.secStart ? "구간단속 끝" : a.secStart ? "구간단속 시작" : "구간단속";
+        if ((a.school || a.section) && !Alerts.inSection) {
+            String label = a.school ? "어린이보호구역 " + a.dist + "m"
+                    : (a.secEnd && !a.secStart ? "구간단속 끝 " : a.secStart ? "구간단속 시작 " : "구간단속 ") + a.dist + "m";
             text.setTextSize(labS);
             text.setTextAlign(Paint.Align.CENTER);
             float tw = text.measureText(label);
@@ -493,19 +503,22 @@ public class HudView extends View {
 
     /** 구간단속 중: "구간 평균 72" (제한속도 넘으면 빨간색) */
     private void drawSectionAvg(Canvas c, int w, int h, boolean landscape) {
+        if (!Alerts.inSection) return;
         int avg = Alerts.sectionAvg();
-        if (avg < 0) return;
         int lim = Alerts.sectionLimit;
         boolean over = lim > 0 && avg > lim;
         float cx, cy, ts;
         if (landscape) {
-            cx = w * 0.80f; cy = h * 0.86f; ts = h * 0.085f;
+            cx = w * 0.80f; cy = h * 0.96f; ts = h * 0.07f; // 맨 아래 (속도 숫자 밑)
         } else {
             cx = w / 2f; cy = h * 0.555f; ts = w * 0.065f;
         }
         int remain = Alerts.sectionRemain();
-        String s = "구간 평균 " + avg + (lim > 0 ? " / " + lim : "")
-                + (remain >= 0 ? "  남은 " + (remain >= 1000 ? String.format(java.util.Locale.ROOT, "%.1fkm", remain / 1000f) : remain + "m") : "");
+        String rs = remain < 0 ? "" : remain >= 1000 ? String.format(java.util.Locale.ROOT, "%.1fkm", remain / 1000f) : (remain / 10 * 10) + "m";
+        String avgS = avg < 0 ? "--" : String.valueOf(avg);
+        String s;
+        if (remain >= 0 && remain < 800) s = "구간단속 끝 " + rs + "  평균 " + avgS + (lim > 0 ? "/" + lim : "");
+        else s = "구간 평균 " + avgS + (lim > 0 ? "/" + lim : "") + (remain >= 0 ? "  끝까지 " + rs : "");
         text.setTextSize(ts);
         text.setTextAlign(Paint.Align.CENTER);
         float tw = text.measureText(s);
