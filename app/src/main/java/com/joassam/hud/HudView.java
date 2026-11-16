@@ -477,7 +477,8 @@ public class HudView extends View {
         nav.sdiDist = keepDist;
         if (temp) nav = null;
         if ((a.school || a.section) && Alerts.sectionAvg() < 0) {
-            String label = a.school ? "어린이보호구역" : "구간단속";
+            String label = a.school ? "어린이보호구역"
+                    : a.secEnd && !a.secStart ? "구간단속 끝" : a.secStart ? "구간단속 시작" : "구간단속";
             text.setTextSize(labS);
             text.setTextAlign(Paint.Align.CENTER);
             float tw = text.measureText(label);
@@ -502,7 +503,9 @@ public class HudView extends View {
         } else {
             cx = w / 2f; cy = h * 0.555f; ts = w * 0.065f;
         }
-        String s = "구간 평균 " + avg + (lim > 0 ? " / " + lim : "");
+        int remain = Alerts.sectionRemain();
+        String s = "구간 평균 " + avg + (lim > 0 ? " / " + lim : "")
+                + (remain >= 0 ? "  남은 " + (remain >= 1000 ? String.format(java.util.Locale.ROOT, "%.1fkm", remain / 1000f) : remain + "m") : "");
         text.setTextSize(ts);
         text.setTextAlign(Paint.Align.CENTER);
         float tw = text.measureText(s);

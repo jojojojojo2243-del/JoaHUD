@@ -35,12 +35,16 @@ public final class Alerts {
     static final String API = "https://api.data.go.kr/openapi/tn_pubr_public_unmanned_traffic_camera_api";
     static final String FILE = "cameras.csv";
     static final long WEEK = 7L * 24 * 3600 * 1000;
-    static final int F_SCHOOL = 1, F_SECTION = 2;
+    static final int F_SCHOOL = 1, F_SECTION = 2, F_SEC_START = 4, F_SEC_END = 8;
+    /** 자료 형식 버전: 구간단속 시점/종점을 담기 시작한 2부터. 낮으면 새로 받음 */
+    static final int FORMAT = 2;
 
     // 불러온 카메라 목록
     private static float[] lat = new float[0], lon = new float[0];
     private static short[] limit = new short[0];
     private static byte[] flags = new byte[0];
+    private static int[] secLen = new int[0]; // 과속단속구간길이(m), 0 = 모름
+    static volatile int sectionCount = 0;
     private static boolean loaded = false;
     static volatile int count = 0;
     static volatile String status = "";
@@ -52,6 +56,7 @@ public final class Alerts {
         int dist;       // 카메라까지 m
         boolean school; // 어린이보호구역
         boolean section;// 구간단속
+        boolean secStart, secEnd; // 구간단속 시점 / 종점
         long time;
     }
 
@@ -69,6 +74,13 @@ public final class Alerts {
     private static long secStart = 0;
     private static double secDist = 0;      // m
     private static int secStartIdx = -1;
+    private static int secLength = 0;       // 이 구간 길이(m), 0 = 모름
+
+    /** 구간단속 남은 거리(m), 모르면 -1 */
+    static int sectionRemain() {
+        if (!inSection || secLength <= 0) return -1;
+        return (int) Math.max(0, secLength - secDist);
+    }
 
     /** 구간단속 중 평균속도(km/h), 구간 밖이면 -1 */
     static int sectionAvg() {
@@ -80,18 +92,32 @@ public final class Alerts {
 
     /** 카메라를 지나쳤을 때: 구간단속 시작/끝 판단 */
     private static void passed(int idx) {
-        if ((flags[idx] & F_SECTION) == 0) return;
+        int f = flags[idx];
+        if ((f & F_SECTION) == 0) return;
+        boolean isEnd = (f & F_SEC_END) != 0;
+        boolean isStart = (f & F_SEC_START) != 0;
         if (!inSection) {
+            if (isEnd && !isStart) return; // 종점 카메라만 지남 (반대 방향이거나 시작을 놓침)
             inSection = true;
             secStart = System.currentTimeMillis();
             secDist = 0;
             secStartIdx = idx;
+            secLength = secLen[idx];
             sectionLimit = limit[idx];
-            NavListenerService.log("구간단속 시작 (제한 " + sectionLimit + ")");
-        } else if (idx != secStartIdx && secDist > 500) {
-            NavListenerService.log("구간단속 끝 — 평균 " + sectionAvg() + "km/h");
-            inSection = false;
+            NavListenerService.log("구간단속 시작 (제한 " + sectionLimit
+                    + (secLength > 0 ? ", 길이 " + String.format(java.util.Locale.ROOT, "%.1f", secLength / 1000f) + "km" : "") + ")");
+        } else if (idx != secStartIdx && secDist > 300 && (isEnd || !isStart)) {
+            endSection("종점 통과");
+        } else if (idx != secStartIdx && isStart && secDist > 300) {
+            // 앞 구간이 끝나고 바로 다음 구간 시작
+            endSection("다음 구간 시작");
+            passed(idx);
         }
+    }
+
+    private static void endSection(String why) {
+        NavListenerService.log("구간단속 끝(" + why + ") — 평균 " + sectionAvg() + "km/h");
+        inSection = false;
     }
 
     // ───────── 자료 불러오기 ─────────
@@ -108,6 +134,8 @@ public final class Alerts {
         float[] la = new float[60000], lo = new float[60000];
         short[] li = new short[60000];
         byte[] fl = new byte[60000];
+        int[] sl = new int[60000];
+        int secN = 0;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null && n < la.length) {
@@ -118,6 +146,8 @@ public final class Alerts {
                     lo[n] = Float.parseFloat(p[1]);
                     li[n] = Short.parseShort(p[2]);
                     fl[n] = Byte.parseByte(p[3]);
+                    sl[n] = p.length > 4 ? Integer.parseInt(p[4]) : 0;
+                    if ((fl[n] & F_SECTION) != 0) secN++;
                     n++;
                 } catch (NumberFormatException ignored) {
                 }
@@ -129,9 +159,11 @@ public final class Alerts {
         lon = java.util.Arrays.copyOf(lo, n);
         limit = java.util.Arrays.copyOf(li, n);
         flags = java.util.Arrays.copyOf(fl, n);
+        secLen = java.util.Arrays.copyOf(sl, n);
         count = n;
+        sectionCount = secN;
         SharedPreferences p = c.getSharedPreferences("hud", Context.MODE_PRIVATE);
-        status = "단속카메라 " + n + "곳 (" + p.getString("pub_date", "?") + " 받음)";
+        status = "단속카메라 " + n + "곳 · 구간단속 " + secN + "곳 (" + p.getString("pub_date", "?") + " 받음)";
     }
 
     static String key(Context c) {
@@ -144,7 +176,8 @@ public final class Alerts {
         SharedPreferences p = c.getSharedPreferences("hud", Context.MODE_PRIVATE);
         if (key(c).isEmpty()) return;
         long last = p.getLong("pub_updated", 0);
-        if (System.currentTimeMillis() - last < WEEK && new File(c.getFilesDir(), FILE).exists()) return;
+        boolean oldFormat = p.getInt("pub_format", 1) < FORMAT; // 예전 자료엔 구간단속 표시가 없음 → 바로 새로 받기
+        if (!oldFormat && System.currentTimeMillis() - last < WEEK && new File(c.getFilesDir(), FILE).exists()) return;
         if (System.currentTimeMillis() - lastAttempt < 3600_000L) return; // 실패하면 1시간 뒤 재시도
         update(c);
     }
@@ -247,12 +280,13 @@ public final class Alerts {
             String date = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.KOREA).format(new java.util.Date());
             c.getSharedPreferences("hud", Context.MODE_PRIVATE).edit()
                     .putLong("pub_updated", System.currentTimeMillis())
+                    .putInt("pub_format", FORMAT)
                     .putString("pub_date", date).apply();
             synchronized (Alerts.class) {
                 loaded = false;
             }
             load(c);
-            NavListenerService.log("단속카메라 자료 업데이트 완료: " + count + "곳");
+            NavListenerService.log("단속카메라 자료 업데이트 완료: " + count + "곳 (구간단속 " + sectionCount + "곳)");
             updating = false;
         }).start();
     }
@@ -267,11 +301,12 @@ public final class Alerts {
         return m;
     }
 
-    /** 항목 하나 → "위도,경도,제한속도,표시" (이름이 조금 달라도 찾아냄) */
-    private static String toRow(JSONObject it) {
+    /** 항목 하나 → "위도,경도,제한속도,표시,구간길이" (이름이 조금 달라도 찾아냄) */
+    static String toRow(JSONObject it) {
         double la = 0, lo = 0;
         int lim = 0;
         int fl = 0;
+        double len = 0;
         Iterator<String> keys = it.keys();
         while (keys.hasNext()) {
             String k = keys.next();
@@ -282,11 +317,33 @@ public final class Alerts {
             else if (kl.startsWith("lmtt") || k.equals("제한속도")) lim = (int) num(v);
             if (v.contains("어린이")) fl |= F_SCHOOL;
             if (kl.startsWith("prtcarea") && (v.equals("1") || v.equals("01"))) fl |= F_SCHOOL;
-            if (v.contains("구간")) fl |= F_SECTION;
+            // 구간단속: '단속구간위치구분'이 1 = 시점, 2 = 종점 (숫자로 옴). 글자로 오는 경우도 대비
+            if (kl.startsWith("regltsctn") || kl.contains("sctnlc") || kl.equals("intelocdiv") || k.equals("단속구간위치구분")) {
+                String d = v.replaceAll("[^0-9가-힣]", "");
+                if (d.equals("1") || d.equals("01") || d.contains("시점") || d.contains("시작")) fl |= F_SECTION | F_SEC_START;
+                else if (d.equals("2") || d.equals("02") || d.contains("종점") || d.contains("끝")) fl |= F_SECTION | F_SEC_END;
+            } else if (kl.startsWith("ovrspdregltsctn") || kl.equals("spdstoplen") || k.equals("과속단속구간길이")) {
+                len = num(v);
+            } else if (kl.equals("itlpc") || k.equals("설치장소")) {
+                if (v.contains("구간")) {
+                    fl |= F_SECTION;
+                    if (v.contains("시점") || v.contains("시작")) fl |= F_SEC_START;
+                    if (v.contains("종점") || v.contains("끝")) fl |= F_SEC_END;
+                }
+            } else if (v.contains("구간단속")) {
+                fl |= F_SECTION;
+            }
+        }
+        // 구간길이: km로 적은 곳(예 3.5)과 m로 적은 곳(예 3500)이 섞여 있음
+        int lenM = len <= 0 ? 0 : len < 100 ? (int) Math.round(len * 1000) : (int) Math.round(len);
+        if (lenM > 50_000) lenM = 0;
+        if (lenM > 0 && (fl & F_SECTION) == 0 && (fl & (F_SEC_START | F_SEC_END)) == 0) {
+            // 길이만 있고 시점/종점 표시가 없으면 구간단속으로 봄 (시점으로 가정)
+            fl |= F_SECTION | F_SEC_START;
         }
         if (la < 33 || la > 39 || lo < 124 || lo > 132) return null; // 한국 밖/오류 좌표
         if (lim < 0 || lim > 150) lim = 0;
-        return String.format(java.util.Locale.ROOT, "%.6f,%.6f,%d,%d", la, lo, lim, fl);
+        return String.format(java.util.Locale.ROOT, "%.6f,%.6f,%d,%d,%d", la, lo, lim, fl, lenM);
     }
 
     private static double num(String s) {
@@ -335,8 +392,9 @@ public final class Alerts {
             float[] dd = new float[1];
             Location.distanceBetween(lastLat, lastLon, la, lo, dd);
             if (dd[0] < 200) secDist += dd[0]; // GPS 튐 무시
-            // 구간 끝을 못 찾은 경우 안전장치: 30km 또는 40분
-            if (secDist > 30000 || System.currentTimeMillis() - secStart > 40 * 60_000L) inSection = false;
+            // 종점 카메라를 못 잡은 경우 안전장치: 구간 길이 + 1km, 길이를 모르면 30km 또는 40분
+            if (secLength > 0 && secDist > secLength + 1000) endSection("구간 길이 지남");
+            else if (secDist > 30000 || System.currentTimeMillis() - secStart > 40 * 60_000L) endSection("너무 오래 지남");
         }
         lastLat = la;
         lastLon = lo;
@@ -390,6 +448,8 @@ public final class Alerts {
         h.dist = Math.round(d / 10f) * 10;
         h.school = (flags[i] & F_SCHOOL) != 0;
         h.section = (flags[i] & F_SECTION) != 0;
+        h.secStart = (flags[i] & F_SEC_START) != 0;
+        h.secEnd = (flags[i] & F_SEC_END) != 0;
         h.time = System.currentTimeMillis();
         return h;
     }
