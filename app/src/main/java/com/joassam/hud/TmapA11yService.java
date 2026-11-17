@@ -127,7 +127,7 @@ public class TmapA11yService extends AccessibilityService {
 
     private boolean mayReturnToHud() {
         long now = System.currentTimeMillis();
-        return guiding() && now > autoStartUntil && now > selfTmapUntil
+        return guiding() && !AutoService.parked() && now > autoStartUntil && now > selfTmapUntil
                 && !HudActivity.visible && !DestActivity.visible && !MainActivity.visible && !ParkActivity.visible
                 && AutoService.carState == 0
                 && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("tmap_back_hud", true);
@@ -197,12 +197,22 @@ public class TmapA11yService extends AccessibilityService {
     private long lastPopupCheck = 0;
 
     /** 운전 중 티맵에 뜨는 오류·안내 창(인터넷 끊김, 지도 갱신 등)을 앱이 대신 닫음 → 손댈 일 없게 */
+    /** 티맵 '업데이트 해주세요' 창 → [닫기] (운전 중 업데이트로 티맵이 꺼지면 안 됨). 눌렀으면 true */
+    private boolean closeTmapUpdate() {
+        if (!(tmapTextShown("업데이트 해") || tmapTextShown("업데이트해") || tmapTextShown("새 버전") || tmapTextShown("최신 버전"))) return false;
+        String hit = clickWord(new String[]{"닫기", "나중에", "다음에", "취소"});
+        if (hit == null) return false;
+        NavListenerService.log("티맵 '업데이트' 창 [" + hit + "] 누름 (업데이트는 주차 중 직접)");
+        return true;
+    }
+
     private void closeTmapPopups() {
         long now = System.currentTimeMillis();
         if (now - lastPopupCheck < 2000) return;
         lastPopupCheck = now;
         if (now < selfTmapUntil) return; // 시동 끌 때 종료 중엔 건드리지 않음
-        if (!HudActivity.visible && !guiding()) return;
+        if (!HudActivity.visible && !guiding() && !AutoService.ignOn) return;
+        if (closeTmapUpdate()) return; // 업데이트 창은 사람이 만지는 중이어도 운전 중이면 닫음
         if (TMAP.equals(fgPkg) && now - lastTmapTouch < 4000) return; // 사람이 티맵을 만지는 중이면 건드리지 않음
         String[] cause = {"네트워크", "인터넷", "통신", "연결 상태", "연결이", "서버", "리소스", "갱신", "일시적", "오류", "다시 시도"};
         String why = null;
@@ -643,6 +653,10 @@ public class TmapA11yService extends AccessibilityService {
     private boolean tryAutoStart() {
         if (System.currentTimeMillis() > autoStartUntil) return false;
         // 티맵을 새로 켰을 때 뜨는 "지도 화면 제공을 위해 리소스를 갱신합니다" → [확인] 대신 누름
+        if (closeTmapUpdate()) {
+            autoStartUntil = Math.max(autoStartUntil, System.currentTimeMillis() + 20_000L);
+            return false;
+        }
         if (tmapTextShown("리소스") && clickWord(new String[]{"확인"}) != null) {
             NavListenerService.log("티맵 '리소스 갱신' 창 [확인] 누름");
             autoStartUntil = Math.max(autoStartUntil, System.currentTimeMillis() + 40_000L); // 받는 동안 더 기다림

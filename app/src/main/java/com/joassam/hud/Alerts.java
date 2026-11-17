@@ -148,7 +148,15 @@ public final class Alerts {
         }
     }
 
+    /** 음성 "조아야 구간 끝": 구간단속 표시 바로 끄기 */
+    static boolean cancelSection() {
+        if (!inSection) return false;
+        endSection("음성으로 끔");
+        return true;
+    }
+
     private static void endSection(String why) {
+        if (!inSection) return;
         NavListenerService.log("구간단속 끝(" + why + ") — 평균 " + sectionAvg() + "km/h");
         inSection = false;
     }
@@ -430,10 +438,16 @@ public final class Alerts {
                 float[] de = new float[1];
                 Location.distanceBetween(la, lo, lat[secEndIdx], lon[secEndIdx], de);
                 if (de[0] < secEndMin) secEndMin = de[0];
-                else if (secEndMin < 120 && de[0] > secEndMin + 40) endSection("종점 지남");
+                // 종점 카메라에 가까이(400m 안) 갔다가 다시 멀어지면 끝 — 공공데이터 좌표가 조금 어긋나도 잡힘
+                else if (secEndMin < 400 && de[0] > secEndMin + 120) endSection("종점 지남");
+                // 종점 쪽으로 가다가 계속 멀어지기만 하면 구간을 벗어난 것 (다른 길로 빠짐)
+                else if (de[0] > secEndMin + 800) endSection("구간 벗어남");
             }
             // 종점 카메라를 못 잡은 경우 안전장치: 구간 길이 + 1km, 길이를 모르면 30km 또는 40분
-            if (secLength > 0 && secDist > secLength + 1000) endSection("구간 길이 지남");
+            if (secLength > 0 && secDist > secLength + 300) endSection("구간 길이 지남");
+            // 길이도 종점도 모르면: 보통 구간단속은 10km 안쪽 → 12km 또는 15분 지나면 끔
+            else if (secLength <= 0 && secEndIdx < 0 && (secDist > 12000 || System.currentTimeMillis() - secStart > 15 * 60_000L))
+                endSection("길이 모름, 12km 지남");
             else if (secDist > 30000 || System.currentTimeMillis() - secStart > 40 * 60_000L) endSection("너무 오래 지남");
         }
         lastLat = la;

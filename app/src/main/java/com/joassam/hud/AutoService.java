@@ -67,6 +67,13 @@ public class AutoService extends Service {
 
     // ───────── 시동 감지 (서브폰 충전 시작/끊김) ─────────
     static volatile boolean ignOn = false;
+    /** 시동 꺼진 시각 (0 = 아직 없음) */
+    static volatile long offAt = 0;
+
+    /** 시동이 꺼진 상태(꺼진 지 30분 안) → HUD를 자동으로 다시 띄우면 안 됨 */
+    static boolean parked() {
+        return !ignOn && offAt > 0 && System.currentTimeMillis() - offAt < 30 * 60_000L;
+    }
     private long lastPowerOn = 0;
 
     private final BroadcastReceiver powerReceiver = new BroadcastReceiver() {
@@ -110,6 +117,7 @@ public class AutoService extends Service {
             }
         }
         ignOn = true;
+        offAt = 0;
         NavListenerService.log("🔑 시동 켜짐(충전 시작)");
         updateNoti("🚗 운행 중");
         if (HudActivity.visible || DestActivity.visible) return;
@@ -122,26 +130,55 @@ public class AutoService extends Service {
     private void onPowerOff() {
         if (!ignOn) return;
         ignOn = false;
+        offAt = System.currentTimeMillis();
         NavListenerService.log("🔑 시동 꺼짐(충전 끊김)");
         updateNoti("대기 중 — 시동을 기다립니다");
         showPark();
     }
 
     private void showPark() {
+        showPark(0);
+    }
+
+    /**
+     * 시동 꺼짐 처리: HUD 닫기 → 티맵 안내 끄기 → (켜 두었으면) 주차 번호 화면.
+     * 중간에 막혀도 20초 뒤 확인해서 HUD·티맵이 남아 있으면 한 번 더 함.
+     */
+    private void showPark(int attempt) {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
-        if (p.getBoolean("auto_close", true)) HudActivity.closeIfOpen();
+        if (ignOn) return; // 그사이 다시 시동 켜짐
+        if (p.getBoolean("auto_close", true) && HudActivity.visible) {
+            HudActivity.closeIfOpen();
+            NavListenerService.log("시동 꺼짐 → HUD 닫음");
+        }
         NavListenerService.stoppingTmapAt = System.currentTimeMillis();
         final boolean park = p.getBoolean("park_show", true) && !p.getString("park_phone", "").isEmpty();
         Runnable showParkScreen = () -> {
             NavListenerService.stoppingTmapAt = System.currentTimeMillis();
+            if (ignOn) return;
+            HudActivity.closeIfOpen();
             if (park) startFromBackground(new Intent(this, ParkActivity.class));
         };
-        if (p.getBoolean("stop_tmap", true) && System.currentTimeMillis() - NavListenerService.lastGuideSeen < 10 * 60_000L) {
+        // 길안내 알림이 지금 떠 있는지로 판단 (티맵은 알림을 처음에만 보내서 '마지막으로 본 시각'은 믿을 수 없음)
+        boolean guiding = NavListenerService.tmapGuiding() || System.currentTimeMillis() - NavListenerService.lastGuideSeen < 10 * 60_000L;
+        if (p.getBoolean("stop_tmap", true) && guiding) {
+            NavListenerService.log("시동 꺼짐 → 티맵 안내 끄는 중" + (attempt > 0 ? " (다시 시도)" : ""));
             // 알림 버튼이 있으면 그걸로, 없으면 티맵 화면에서 [안내 종료]를 대신 누름 → 그다음 번호 화면
             if (NavListenerService.stopTmap()) handler.postDelayed(showParkScreen, 1500);
             else TmapA11yService.endGuidance(showParkScreen);
         } else {
             handler.postDelayed(showParkScreen, 1500);
+        }
+        if (attempt == 0) {
+            handler.postDelayed(() -> {
+                if (ignOn) return;
+                boolean hudLeft = HudActivity.visible;
+                boolean tmapLeft = p.getBoolean("stop_tmap", true) && NavListenerService.tmapGuiding();
+                if (hudLeft || tmapLeft) {
+                    NavListenerService.log("시동 꺼짐 처리 확인: " + (hudLeft ? "HUD " : "") + (tmapLeft ? "티맵 " : "") + "남아 있음 → 한 번 더");
+                    showPark(1);
+                }
+            }, 20_000L);
         }
     }
 

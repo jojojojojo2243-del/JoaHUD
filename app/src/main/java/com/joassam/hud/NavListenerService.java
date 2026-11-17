@@ -287,6 +287,7 @@ public class NavListenerService extends NotificationListenerService {
      * 그래서 티맵이 앞에 있으면 먼저 홈 버튼을 대신 누르고 1.2초 뒤 HUD를 띄움.
      */
     static void openHudViaHome(android.content.Context c, String why) {
+        if (AutoService.parked()) return; // 시동 꺼진 뒤엔 HUD를 다시 띄우지 않음
         final android.content.Context app = c.getApplicationContext();
         Runnable open = () -> {
             try {

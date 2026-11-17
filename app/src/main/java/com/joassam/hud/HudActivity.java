@@ -316,8 +316,12 @@ public class HudActivity extends Activity {
     private boolean voiceCommand0(String said) {
         String s = said.replace(" ", "").replace(".", "").toUpperCase(java.util.Locale.ROOT);
         String cmd = null;
+        // ── 구간단속 표시 끄기 ──
+        if (has(s, "구간끝", "구간단속끝", "구간꺼", "구간단속꺼", "구간종료", "구간단속종료", "평균꺼", "구간지워")) {
+            cmd = Alerts.cancelSection() ? "구간단속 표시를 껐어요" : "지금은 구간단속 중이 아니에요";
+        }
         // ── 티맵 ──
-        if (has(s, "티맵꺼", "티맵종료", "티맵닫", "티맵끄", "내비꺼", "내비종료", "네비꺼", "네비종료")) {
+        else if (has(s, "티맵꺼", "티맵종료", "티맵닫", "티맵끄", "내비꺼", "내비종료", "네비꺼", "네비종료")) {
             cmd = "티맵을 끌게요";
             TmapA11yService.endGuidance(backToHud(), true);
         } else if (has(s, "안내종료", "안내꺼", "안내끄", "안내그만", "길안내종료", "안내중지", "안내취소")) {

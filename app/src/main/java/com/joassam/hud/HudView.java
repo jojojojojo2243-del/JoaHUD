@@ -519,9 +519,16 @@ public class HudView extends View {
         String s;
         if (remain >= 0 && remain < 800) s = "구간단속 끝 " + rs + "  평균 " + avgS + (lim > 0 ? "/" + lim : "");
         else s = "구간 평균 " + avgS + (lim > 0 ? "/" + lim : "") + (remain >= 0 ? "  끝까지 " + rs : "");
+        // 칸 안에 다 들어가게 글자 크기 줄임 (오른쪽 끝 잘림 방지)
+        float maxW = landscape ? w * 0.38f - ts * 0.8f : w * 0.92f - ts * 0.8f;
         text.setTextSize(ts);
+        while (text.measureText(s) > maxW && ts > 8) {
+            ts *= 0.92f;
+            text.setTextSize(ts);
+        }
         text.setTextAlign(Paint.Align.CENTER);
         float tw = text.measureText(s);
+        if (landscape) cx = Math.min(cx, w - tw / 2f - ts * 0.6f);
         Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
         bg.setColor(over ? Color.rgb(200, 20, 20) : Color.rgb(40, 40, 40));
         c.drawRoundRect(new RectF(cx - tw / 2f - ts * 0.4f, cy - ts * 1.05f, cx + tw / 2f + ts * 0.4f, cy + ts * 0.35f),
