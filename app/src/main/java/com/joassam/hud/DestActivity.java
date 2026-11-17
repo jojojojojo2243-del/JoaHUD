@@ -519,15 +519,83 @@ public class DestActivity extends Activity {
         saveRecent(dest2);
         status.setText("🔎 '" + dest2 + "'" + (addr.equals(dest2) ? "" : " (" + addr + ")") + " 찾는 중…");
         new Thread(() -> {
-            double[] ll = geocode(addr);
+            double[] ll = findLL(addr);
             runOnUiThread(() -> openTmap(addr.equals(dest2) ? dest2 : addr, dest2, ll));
         }).start();
+    }
+
+    /**
+     * 좌표 찾기: ① 한 번 찾은 곳은 폰에 저장해 둔 좌표(인터넷 없이도 됨)
+     *            ② 휴대폰 내장 주소 검색 ③ 오픈스트리트맵 주소 검색(무료, 키 없음)
+     */
+    private double[] findLL(String q) {
+        String key = "ll:" + q.replaceAll("\\s+", " ").trim();
+        String saved = p.getString(key, "");
+        if (!saved.isEmpty()) {
+            try {
+                String[] a = saved.split(",");
+                return new double[]{Double.parseDouble(a[0]), Double.parseDouble(a[1])};
+            } catch (Exception ignored) {
+            }
+        }
+        double[] ll = geocode(q);
+        boolean approx = false;
+        if (ll == null) {
+            ll = osm(q);
+            if (ll == null) for (String t : trims(q)) {
+                ll = osm(t);
+                if (ll != null) break;
+            }
+            if (ll == null) {
+                // 번지까지는 못 찾으면 길 이름까지만 (대략 위치 — 근처까지 안내)
+                String road = q.replaceAll("\\(.*?\\)", " ").replaceAll("\\s+\\d+(-\\d+)?(\\s.*)?$", "").trim();
+                if (!road.equals(q.trim()) && road.length() >= 4) {
+                    ll = osm(road);
+                    if (ll != null) {
+                        approx = true;
+                        NavListenerService.log("번지는 못 찾아 길 이름으로 대략 위치: " + road);
+                    }
+                }
+            } else NavListenerService.log("오픈스트리트맵에서 좌표 찾음: " + q);
+        }
+        if (ll != null && !approx) p.edit().putString(key, String.format(Locale.ROOT, "%.6f,%.6f", ll[0], ll[1])).apply();
+        return ll;
+    }
+
+    /** 오픈스트리트맵(Nominatim) 주소 검색 — 휴대폰 내장 검색이 안 될 때 */
+    private static double[] osm(String q) {
+        java.net.HttpURLConnection con = null;
+        try {
+            String u = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&accept-language=ko&q="
+                    + java.net.URLEncoder.encode(q, "UTF-8");
+            con = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+            con.setRequestProperty("User-Agent", "JoaHUD/1.0 (personal car HUD app)");
+            con.setConnectTimeout(6000);
+            con.setReadTimeout(6000);
+            if (con.getResponseCode() != 200) return null;
+            java.io.InputStream in = con.getInputStream();
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            org.json.JSONArray arr = new org.json.JSONArray(bo.toString("UTF-8"));
+            if (arr.length() == 0) return null;
+            org.json.JSONObject o = arr.getJSONObject(0);
+            return new double[]{Double.parseDouble(o.getString("lat")), Double.parseDouble(o.getString("lon"))};
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (con != null) con.disconnect();
+        }
     }
 
     /** 휴대폰 내장 주소 검색(무료)으로 좌표 찾기 */
     private double[] geocode(String q) {
         try {
-            if (!Geocoder.isPresent()) return null;
+            if (!Geocoder.isPresent()) {
+                NavListenerService.log("휴대폰 내장 주소 검색 없음 → 오픈스트리트맵으로 찾기");
+                return null;
+            }
             Geocoder g = new Geocoder(this, Locale.KOREA);
             List<Address> a = null;
             // 지금 위치 근처(약 50km)에서 먼저 찾기 → 같은 이름이 여러 곳이면 가까운 곳
@@ -555,7 +623,9 @@ public class DestActivity extends Activity {
             if (a != null && !a.isEmpty() && a.get(0).hasLatitude()) {
                 return new double[]{a.get(0).getLatitude(), a.get(0).getLongitude()};
             }
-        } catch (Exception ignored) {
+            NavListenerService.log("휴대폰 내장 주소 검색 결과 없음: " + q);
+        } catch (Exception e) {
+            NavListenerService.log("휴대폰 내장 주소 검색 오류(" + e.getClass().getSimpleName() + ") → 오픈스트리트맵으로 찾기");
         }
         return null;
     }
