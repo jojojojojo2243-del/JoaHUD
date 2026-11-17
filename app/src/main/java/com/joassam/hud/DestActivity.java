@@ -636,7 +636,7 @@ public class DestActivity extends Activity {
         String u = sp.getString("last_route_url", "");
         if (u.isEmpty()) return false;
         try {
-            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 30_000L;
+            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 60_000L;
             NavListenerService.destFlowAt = System.currentTimeMillis();
             c.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)).setPackage(TmapA11yService.TMAP)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -657,7 +657,7 @@ public class DestActivity extends Activity {
             String n = Uri.encode(label);
             urls.add("tmap://route?goalname=" + n + "&goalx=" + ll[1] + "&goaly=" + ll[0]
                     + "&rGoName=" + n + "&rGoX=" + ll[1] + "&rGoY=" + ll[0]);
-            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 30_000L; // [안내] 버튼 자동 누르기
+            TmapA11yService.autoStartUntil = System.currentTimeMillis() + 60_000L; // [안내] 버튼 자동 누르기
             p.edit().putString("last_route_url", urls.get(0)).putString("last_route_name", label).apply();
         }
         urls.add("tmap://search?name=" + enc);

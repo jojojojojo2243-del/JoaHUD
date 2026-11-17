@@ -672,8 +672,12 @@ public class TmapA11yService extends AccessibilityService {
                     for (AccessibilityNodeInfo n : found) {
                         CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
                         if (t == null) continue;
-                        String ts = t.toString().replace(" ", "");
-                        if (!ts.equals(word.replace(" ", ""))) continue; // 정확히 그 글자인 버튼만
+                        // 티맵 새 버전은 버튼에 카운트다운 숫자가 붙음 ("⑮ 안내시작", "15 안내시작") → 숫자·기호 빼고 비교
+                        String ts = norm(t.toString());
+                        String want = norm(word);
+                        boolean ok = ts.equals(want)
+                                || (want.length() >= 4 && ts.contains(want) && ts.length() <= want.length() + 8);
+                        if (!ok || ts.matches(".*(종료|취소|설정|끄기|중지).*")) continue;
                         AccessibilityNodeInfo c = n;
                         for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
                         if (c != null && c.isClickable() && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
@@ -689,10 +693,21 @@ public class TmapA11yService extends AccessibilityService {
         return false;
     }
 
+    private boolean startFailLogged = false;
+
     private final Runnable startLoop = new Runnable() {
         @Override
         public void run() {
-            if (System.currentTimeMillis() > autoStartUntil) return;
+            long now = System.currentTimeMillis();
+            if (now > autoStartUntil) {
+                // 시간 안에 못 눌렀으면 원인 확인용으로 티맵 버튼 글자를 한 번 남김
+                if (!startFailLogged && autoStartUntil > 0 && now - autoStartUntil < 5000) {
+                    startFailLogged = true;
+                    NavListenerService.log("[안내시작]을 못 찾음 — 티맵 버튼: " + tmapButtons());
+                }
+                return;
+            }
+            startFailLogged = false;
             if (!tryAutoStart()) handler.postDelayed(this, 700);
         }
     };
