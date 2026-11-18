@@ -117,6 +117,54 @@ public class TmapA11yService extends AccessibilityService {
 
     // ── 티맵을 만지다가도 HUD로 돌아가기 ──
     private volatile long lastTmapTouch = 0, tmapFgSince = 0;
+
+    /** 사람이 최근 ms 안에 티맵 화면을 만졌는지 (티맵이 앞에 있을 때) */
+    static boolean userTouching(long ms) {
+        TmapA11yService a = instance;
+        return a != null && TMAP.equals(fgPkg) && System.currentTimeMillis() - a.lastTmapTouch < ms
+                && System.currentTimeMillis() > autoStartUntil;
+    }
+
+    static void pressHome() {
+        TmapA11yService a = instance;
+        if (a != null) a.performGlobalAction(GLOBAL_ACTION_HOME);
+    }
+
+    private long lastSysPopup = 0;
+
+    /** 운전 중 삼성 시스템 창 "○○에 연결할까요? (핫스팟)" → [취소] (HUD를 가리지 않게) */
+    private void closeSystemPopups() {
+        long now = System.currentTimeMillis();
+        if (now - lastSysPopup < 2000 || !AutoService.ignOn) return;
+        lastSysPopup = now;
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                AccessibilityNodeInfo root = w.getRoot();
+                if (root == null || root.getPackageName() == null) continue;
+                String pk = root.getPackageName().toString();
+                if (pk.equals(TMAP) || pk.equals(getPackageName())) continue;
+                List<AccessibilityNodeInfo> q = root.findAccessibilityNodeInfosByText("연결할까요");
+                if (q == null || q.isEmpty()) continue;
+                List<AccessibilityNodeInfo> hs = root.findAccessibilityNodeInfosByText("핫스팟");
+                if (hs == null || hs.isEmpty()) continue;
+                for (String word : new String[]{"취소", "닫기", "나중에"}) {
+                    List<AccessibilityNodeInfo> b = root.findAccessibilityNodeInfosByText(word);
+                    if (b == null) continue;
+                    for (AccessibilityNodeInfo n : b) {
+                        CharSequence t = n.getText();
+                        if (t == null || !norm(t.toString()).equals(norm(word))) continue;
+                        AccessibilityNodeInfo c = n;
+                        for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
+                        if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                            NavListenerService.log("운전 중 '핫스팟 연결' 창 [" + word + "] 누름");
+                            return;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
     /** 앱이 일부러 티맵을 여는 동안(미니 창 되살리기·시동 끌 때 종료)은 자동 전환 안 함 */
     static volatile long selfTmapUntil = 0;
     private String homePkg = null;
@@ -225,6 +273,7 @@ public class TmapA11yService extends AccessibilityService {
     private void tick() {
         checkTmapIdle();
         closeTmapPopups();
+        closeSystemPopups();
         if (!HudActivity.visible) {
             hideCover();
             return;

@@ -179,6 +179,8 @@ public class DestActivity extends Activity {
             List<String> l = new ArrayList<>();
             l.add(said0);
             handler.postDelayed(() -> heard(l), 600);
+        } else if (getIntent() != null && getIntent().getBooleanExtra("retry", false)) {
+            handler.postDelayed(() -> ask("길안내가 시작되지 않았어요. 어디로 갈까요?"), 800);
         } else if (nextMode) handler.postDelayed(() -> ask("도착했어요. 다음 목적지 있으세요?"), 800);
         else if (p.getBoolean("dest_voice", true)) handler.postDelayed(() -> ask("어디로 갈까요?"), 800);
     }
@@ -647,6 +649,44 @@ public class DestActivity extends Activity {
         }
     }
 
+    // ───────── 길안내가 안 시작되면 다시 묻기 ─────────
+    private static final android.os.Handler wd = new android.os.Handler(android.os.Looper.getMainLooper());
+    private static long wdToken = 0;
+
+    /**
+     * 티맵을 연 뒤 75초 안에 길안내가 시작되지 않으면 (목적지를 못 찾음, 알림 창이 가림, 화면이 멈춤 등
+     * 이유가 무엇이든) 티맵을 내리고 "어디로 갈까요?"를 다시 물음. 사람이 티맵을 만지는 중이면 더 기다림.
+     */
+    static void armWatchdog(android.content.Context app, String label) {
+        final long token = ++wdToken;
+        final long openedAt = System.currentTimeMillis();
+        final int[] waits = {0};
+        Runnable check = new Runnable() {
+            @Override
+            public void run() {
+                if (token != wdToken) return;             // 그사이 다른 목적지를 다시 고름
+                if (AutoService.parked()) return;          // 시동 꺼짐
+                if (NavListenerService.lastGuideSeen > openedAt) return; // 길안내 시작됨 → 정상
+                if (DestActivity.visible) return;
+                if (TmapA11yService.userTouching(15_000L) && waits[0]++ < 4) {
+                    wd.postDelayed(this, 30_000L);         // 사람이 직접 고르는 중 → 30초 더
+                    return;
+                }
+                NavListenerService.log("'" + label + "' 길안내가 시작되지 않음 → 다시 물어봄");
+                TmapA11yService.pressHome();
+                wd.postDelayed(() -> {
+                    try {
+                        app.startActivity(new Intent(app, DestActivity.class).putExtra("retry", true)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                    } catch (Exception e) {
+                        NavListenerService.log("다시 묻기 화면 못 띄움: " + e.getMessage());
+                    }
+                }, 800);
+            }
+        };
+        wd.postDelayed(check, 75_000L);
+    }
+
     private void openTmap(String dest, String label, double[] ll) {
         NavListenerService.destFlowAt = System.currentTimeMillis();
         String enc = Uri.encode(dest);
@@ -667,6 +707,7 @@ public class DestActivity extends Activity {
                         .setPackage(TmapA11yService.TMAP)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
+                armWatchdog(getApplicationContext(), label);
                 NavListenerService.log("목적지 '" + dest + "' → 티맵 " + (u.contains("goalx") ? "길안내(좌표 " + String.format(Locale.ROOT, "%.4f,%.4f", ll[0], ll[1]) + ")" : "검색(좌표 못 찾음)") + " 실행");
                 finish();
                 return;
