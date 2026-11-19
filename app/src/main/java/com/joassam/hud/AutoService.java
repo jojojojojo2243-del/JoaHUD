@@ -246,6 +246,8 @@ public class AutoService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // 앱이 갑자기 꺼져 미디어 소리(티맵 안내)가 꺼진 채 남았으면 되살림 (HUD가 안 떠 있을 때만)
+        if (!HudActivity.visible) WakeWord.restoreMusic(this);
         startAsForeground("대기 중 — 안드로이드 오토 연결을 기다립니다");
         if (!running) {
             running = true;

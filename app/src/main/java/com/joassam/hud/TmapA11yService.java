@@ -66,7 +66,7 @@ public class TmapA11yService extends AccessibilityService {
                 }
             } finally {
                 handler.removeCallbacks(this);
-                handler.postDelayed(this, 700);
+                handler.postDelayed(this, Thermal.captureInterval(TmapA11yService.this));
             }
         }
     };
@@ -1025,6 +1025,28 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     /** 티맵 패키지의 작은 창(미니 안내) 위치 */
+    private long widgetTextLoggedAt = 0;
+
+    /**
+     * 미니 창 안의 글자(거리·방향)를 접근성으로 읽을 수 있는지 확인용 — 10분에 한 번 기록.
+     * 글자가 나오면 다음 단계로 '화면을 찍지 않고 글자로 HUD 그리기'를 할 수 있음.
+     */
+    private void logWidgetText(AccessibilityNodeInfo root) {
+        long now = System.currentTimeMillis();
+        if (now - widgetTextLoggedAt < 10 * 60_000L) return;
+        widgetTextLoggedAt = now;
+        StringBuilder sb = new StringBuilder();
+        collectText(root, sb, 0);
+        NavListenerService.log("티맵 미니 창 글자: " + (sb.length() == 0 ? "(없음 — 그림으로만 그려짐)" : sb.toString()));
+    }
+
+    private void collectText(AccessibilityNodeInfo n, StringBuilder sb, int depth) {
+        if (n == null || depth > 8 || sb.length() > 200) return;
+        CharSequence t = n.getText() != null ? n.getText() : n.getContentDescription();
+        if (t != null && t.toString().trim().length() > 0) sb.append('[').append(t.toString().trim()).append(']');
+        for (int i = 0; i < n.getChildCount(); i++) collectText(n.getChild(i), sb, depth + 1);
+    }
+
     private Rect findTmapWidget() {
         try {
             DisplayMetrics dm = getResources().getDisplayMetrics();
@@ -1040,6 +1062,7 @@ public class TmapA11yService extends AccessibilityService {
                 long area = (long) b.width() * b.height();
                 if (area > 0 && area < screen / 2) {
                     widgetId = w.getId();
+                    logWidgetText(root);
                     return b;
                 }
             }

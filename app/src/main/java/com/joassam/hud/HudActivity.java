@@ -61,8 +61,9 @@ public class HudActivity extends Activity {
     private static final String[] SPEED_NAMES = {"보통", "크게", "아주 크게"};
 
     static final int[] COLORS = {
-            Color.rgb(0, 255, 102), Color.WHITE, Color.rgb(0, 229, 255), Color.rgb(255, 214, 0)
+            Color.rgb(0, 255, 102), Color.WHITE, Color.rgb(0, 229, 255), Color.rgb(255, 214, 0), Color.rgb(255, 150, 30)
     };
+    static final String[] COLOR_NAMES = {"초록", "흰색", "하늘색", "노란색", "주황"};
 
     private final LocationListener locListener = new LocationListener() {
         @Override
@@ -102,15 +103,15 @@ public class HudActivity extends Activity {
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         WindowManager.LayoutParams lp = getWindow().getAttributes();
         // 폰 자동 밝기를 따름 (끄면 항상 최대 밝기)
-        lp.screenBrightness = getSharedPreferences("hud", MODE_PRIVATE).getBoolean("auto_bright", true)
-                ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : 1f;
         getWindow().setAttributes(lp);
+        applyBrightness();
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
 
         hud = new HudView(this);
         hud.setColor(COLORS[prefs.getInt("color", 0) % COLORS.length]);
+        hud.setAlertsOn(prefs.getBoolean("alerts_on", true));
         hud.setSpeedScale(SPEED_SCALES[prefs.getInt("speed_size", 1) % SPEED_SCALES.length]);
         root.addView(hud, new FrameLayout.LayoutParams(-1, -1));
         applyMirror();
@@ -262,8 +263,37 @@ public class HudActivity extends Activity {
     private android.speech.tts.TextToSpeech tts;
     private boolean ttsReady = false;
 
+    /** 밝기: 폰 자동 / 음성으로 정한 값 / 폰이 뜨거우면 낮춤 */
+    private void applyBrightness() {
+        android.content.SharedPreferences sp = getSharedPreferences("hud", MODE_PRIVATE);
+        float b = sp.getBoolean("auto_bright", true) ? -1f : sp.getFloat("bright_level", 1f);
+        int heat = Thermal.level(this);
+        float cap = heat >= 2 ? 0.45f : heat == 1 ? 0.7f : 1f;
+        if (b < 0 && heat > 0) b = cap;           // 자동 밝기여도 뜨거우면 낮춤
+        else if (b > cap) b = cap;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = b < 0 ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : b;
+        getWindow().setAttributes(lp);
+    }
+
+    private final Runnable heatCheck = new Runnable() {
+        @Override
+        public void run() {
+            applyBrightness();
+            handler.postDelayed(this, 30_000L);
+        }
+    };
+
+    /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
+    static boolean command(String said) {
+        HudActivity a = current != null ? current.get() : null;
+        if (a == null || a.isFinishing()) return false;
+        return a.voiceCommand(said);
+    }
+
     private void say(String msg) {
         // 음성 명령 결과는 소리로만 (앞유리에 글자 안 띄움)
+        WakeWord.ttsUntil = System.currentTimeMillis() + 800 + msg.length() * 180L;
         try {
             if (tts == null) {
                 tts = new android.speech.tts.TextToSpeech(this, st -> {
@@ -292,6 +322,86 @@ public class HudActivity extends Activity {
         };
     }
 
+    /** "흰색으로", "초록색" 같은 말 → 색 번호 (없으면 -1) */
+    private static int colorByName(String s) {
+        if (has(s, "흰색", "하얀", "하양", "화이트", "백색")) return 1;
+        if (has(s, "초록", "녹색", "그린", "연두")) return 0;
+        if (has(s, "하늘", "파란", "파랑", "블루", "시안", "청색")) return 2;
+        if (has(s, "노란", "노랑", "옐로", "황색")) return 3;
+        if (has(s, "주황", "오렌지")) return 4;
+        return -1;
+    }
+
+    /** 새로 늘린 음성 명령 (밝기·소리 크기·시간·속도·구간 평균·도움말·경고 켜고 끄기) */
+    private String voiceCommandMore(String s) {
+        android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+        if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
+            return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 경로 다시, 목적지 바꿔, "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜 예요";
+        }
+        if (has(s, "소리크게", "볼륨올", "볼륨크게", "소리키워", "크게말", "안내크게")) {
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_RAISE, 0);
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_RAISE, 0);
+            return "소리를 키웠어요";
+        }
+        if (has(s, "소리작게", "볼륨내", "볼륨작게", "소리줄여", "작게말", "안내작게", "조용히")) {
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_LOWER, 0);
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_LOWER, 0);
+            return "소리를 줄였어요";
+        }
+        if (has(s, "밝게", "밝기올", "환하게", "더밝")) {
+            float b = Math.min(1f, prefs.getFloat("bright_level", 0.7f) + 0.2f);
+            prefs.edit().putBoolean("auto_bright", false).putFloat("bright_level", b).apply();
+            applyBrightness();
+            return "밝게 했어요";
+        }
+        if (has(s, "어둡게", "밝기내", "밝기줄", "덜밝", "눈부")) {
+            float b = Math.max(0.15f, prefs.getFloat("bright_level", 1f) - 0.2f);
+            prefs.edit().putBoolean("auto_bright", false).putFloat("bright_level", b).apply();
+            applyBrightness();
+            return "어둡게 했어요";
+        }
+        if (has(s, "자동밝기", "밝기자동")) {
+            prefs.edit().putBoolean("auto_bright", true).apply();
+            applyBrightness();
+            return "밝기를 자동으로 맞출게요";
+        }
+        if (has(s, "몇시", "지금시간", "시간알려")) {
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            int hh = cal.get(java.util.Calendar.HOUR_OF_DAY), mm = cal.get(java.util.Calendar.MINUTE);
+            return (hh < 12 ? "오전 " : "오후 ") + (hh % 12 == 0 ? 12 : hh % 12) + "시 " + mm + "분이에요";
+        }
+        if (has(s, "지금속도", "속도알려", "몇키로", "몇킬로")) {
+            int v = Math.round(Math.max(0, hud.speedNow()));
+            return "지금 시속 " + v + "킬로예요";
+        }
+        if (has(s, "구간평균", "평균속도", "평균몇")) {
+            if (!Alerts.inSection) return "지금은 구간단속 중이 아니에요";
+            int avg = Alerts.sectionAvg(), rem = Alerts.sectionRemain();
+            return "구간 평균 " + Math.max(avg, 0) + "킬로" + (Alerts.sectionLimit > 0 ? ", 제한 " + Alerts.sectionLimit : "")
+                    + (rem >= 0 ? ", 끝까지 " + (rem >= 1000 ? String.format(java.util.Locale.ROOT, "%.1f킬로", rem / 1000f) : rem + "미터") : "") + "예요";
+        }
+        if (has(s, "경고꺼", "단속경고꺼", "카메라경고꺼", "경고끄", "경고그만")) {
+            prefs.edit().putBoolean("alerts_on", false).apply();
+            hud.setAlertsOn(false);
+            return "단속 경고를 껐어요";
+        }
+        if (has(s, "경고켜", "단속경고켜", "카메라경고켜")) {
+            prefs.edit().putBoolean("alerts_on", true).apply();
+            hud.setAlertsOn(true);
+            return "단속 경고를 켰어요";
+        }
+        if (has(s, "주차번호꺼", "전화번호꺼", "번호화면꺼")) {
+            prefs.edit().putBoolean("park_show", false).apply();
+            return "시동 끌 때 주차 번호를 안 띄울게요";
+        }
+        if (has(s, "주차번호켜", "전화번호켜", "번호화면켜")) {
+            prefs.edit().putBoolean("park_show", true).apply();
+            return "시동 끌 때 주차 번호를 띄울게요";
+        }
+        return null;
+    }
+
     private static boolean has(String s, String... words) {
         for (String w : words) if (s.contains(w)) return true;
         return false;
@@ -313,9 +423,42 @@ public class HudActivity extends Activity {
         }
     }
 
+    /** 자주 잘못 알아듣는 말 → 원래 명령으로 (발음이 비슷하면 고침) */
+    private static final String[] CANON = {
+            "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
+            "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
+            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜"};
+
+    private static String canon(String s) {
+        if (s.length() > 8) return s;
+        String best = s;
+        double bs = 0;
+        for (String c : CANON) {
+            double v = VoicePick.similar(s, c);
+            if (v > bs) {
+                bs = v;
+                best = c;
+            }
+        }
+        return bs >= 0.8 && s.length() >= 2 ? best : s;
+    }
+
     private boolean voiceCommand0(String said) {
-        String s = said.replace(" ", "").replace(".", "").toUpperCase(java.util.Locale.ROOT);
-        String cmd = null;
+        String s0 = said.replace(" ", "").replace(".", "").replace("요", "").toUpperCase(java.util.Locale.ROOT);
+        String s = s0;
+        String cmd = voiceCommandMore(s);
+        if (cmd == null) {
+            String c2 = canon(s0);
+            if (!c2.equals(s0)) {
+                s = c2;
+                cmd = voiceCommandMore(s);
+            }
+        }
+        if (cmd != null) {
+            NavListenerService.log("음성 명령: \"" + said + "\" → " + cmd);
+            say(cmd);
+            return true;
+        }
         // ── 구간단속 표시 끄기 ──
         if (has(s, "구간끝", "구간단속끝", "구간꺼", "구간단속꺼", "구간종료", "구간단속종료", "평균꺼", "구간지워")) {
             cmd = Alerts.cancelSection() ? "구간단속 표시를 껐어요" : "지금은 구간단속 중이 아니에요";
@@ -375,6 +518,11 @@ public class HudActivity extends Activity {
             prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false)).apply();
             applyMirror();
             cmd = "위아래를 바꿨어요";
+        } else if (colorByName(s) >= 0) {
+            int c = colorByName(s);
+            prefs.edit().putInt("color", c).apply();
+            hud.setColor(COLORS[c]);
+            cmd = "글자 색을 " + COLOR_NAMES[c] + "으로 바꿨어요";
         } else if (has(s, "색바꿔", "색깔", "색상", "색변경", "다른색")) {
             int c = (prefs.getInt("color", 0) + 1) % COLORS.length;
             prefs.edit().putInt("color", c).apply();
@@ -477,6 +625,8 @@ public class HudActivity extends Activity {
         // 운전 중 "조아야" 부르면 목적지 바꾸기 (HUD가 떠 있을 때만 들음)
         if (wake == null) wake = new WakeWord(this);
         wake.start();
+        handler.removeCallbacks(heatCheck);
+        handler.post(heatCheck);
     }
 
     private WakeWord wake;

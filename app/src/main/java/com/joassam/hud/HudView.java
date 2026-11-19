@@ -58,6 +58,18 @@ public class HudView extends View {
         invalidate();
     }
 
+    private boolean alertsOn = true;
+
+    /** 음성 "경고 꺼/켜": 단속카메라·어린이보호구역 경고 표시 */
+    public void setAlertsOn(boolean on) {
+        alertsOn = on;
+        invalidate();
+    }
+
+    public float speedNow() {
+        return speed;
+    }
+
     public void setSpeed(float kmh) {
         speed = kmh;
         invalidate();
@@ -186,7 +198,7 @@ public class HudView extends View {
     private void drawLandscapeHud(Canvas c, int w, int h, boolean guiding, boolean stale, boolean hasFrame) {
         float pad = h * 0.08f;
         // 위: 시계 (오른쪽)
-        text.setColor(Color.WHITE);
+        text.setColor(color);
         text.setTextAlign(Paint.Align.RIGHT);
         text.setTextSize(h * 0.10f);
         c.drawText(clock.format(new Date()), w - pad, pad + h * 0.08f, text);
@@ -448,13 +460,14 @@ public class HudView extends View {
         if (lim > 0 && speed > lim + 2) {
             return (System.currentTimeMillis() / 400) % 2 == 0 ? Color.rgb(255, 40, 40) : Color.rgb(255, 150, 150);
         }
-        return Color.WHITE;
+        return color; // 글자 색 설정(음성 "흰색으로" 등)을 따름
     }
 
     /** 공공데이터 경고: 단속카메라(거리) · 제한속도 · 어린이보호구역 */
     private void drawPublicAlert(Canvas c, int w, int h, boolean landscape, boolean guiding) {
         // 티맵 공식 연동 정보가 있으면 그쪽을 그대로 씀
         drawSectionAvg(c, w, h, landscape);
+        if (!alertsOn) return;
         if (guiding && (nav.limit > 0 || nav.sdiDist > 0)) return;
         Alerts.Hit a = Alerts.now();
         if (a == null) return;

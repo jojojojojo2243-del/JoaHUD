@@ -62,6 +62,7 @@ final class WakeWord {
         errors = 0;
         muteBeep(true);
         h.postDelayed(this::listen, 1500);
+        h.postDelayed(monitor, 1500);
     }
 
     void stop() {
@@ -76,6 +77,7 @@ final class WakeWord {
             sr = null;
         }
         muteBeep(false);
+        musicMute(false);
     }
 
     /** '띵' 소리를 막음: 시스템·알림 소리는 듣는 동안 계속 끄고 */
@@ -102,7 +104,42 @@ final class WakeWord {
     /** 삼성 폰은 '띵'을 미디어 소리로 냄 → 듣기를 켜고 끄는 1초 남짓만 미디어 소리를 끔.
      *  티맵이 말하는 중이면 끄지 않음 (그때는 다시 듣기를 미룸). */
     private boolean musicMuted = false;
-    private final Runnable unmuteMusic = () -> musicMute(false);
+    private final Runnable unmuteMusic = () -> { if (!steady()) musicMute(false); };
+
+    /**
+     * '띵' 완전 차단: 구글 인식기를 쓸 때는 듣는 동안 미디어 소리를 계속 꺼 두고,
+     * 티맵 안내 음성(0.3초 넘게 이어지는 소리)이나 앱 음성 답이 나올 때만 켬. 짧은 '띵'은 묻힘.
+     */
+    private boolean steady() {
+        return on && !onDevice && act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ding_block", true);
+    }
+
+    /** 앱이 음성으로 답하는 동안(ms) 미디어 소리를 켜 둠 */
+    static volatile long ttsUntil = 0;
+    private int activeMs = 0;
+    private long holdUntil = 0;
+    private final Runnable monitor = new Runnable() {
+        @Override
+        public void run() {
+            if (!on) return;
+            if (steady()) {
+                long now = System.currentTimeMillis();
+                boolean active = false;
+                try {
+                    active = ((AudioManager) act.getSystemService(Activity.AUDIO_SERVICE)).isMusicActive();
+                } catch (Exception ignored) {
+                }
+                activeMs = active ? activeMs + 150 : 0;
+                if (now < ttsUntil || activeMs >= 300) {
+                    if (musicMuted) musicMute(false);   // 티맵 안내·앱 답은 들리게
+                    holdUntil = now + 1200;
+                } else if (!active && now > holdUntil && !musicMuted) {
+                    musicMute(true);                     // 조용해지면 다시 끔
+                }
+            }
+            h.postDelayed(this, 150);
+        }
+    };
 
     private void musicMute(boolean mute) {
         if (mute == musicMuted) return;
@@ -115,7 +152,7 @@ final class WakeWord {
         } catch (Exception ignored) {
         }
         h.removeCallbacks(unmuteMusic);
-        if (mute) h.postDelayed(unmuteMusic, 2500); // 무슨 일이 있어도 2.5초 뒤엔 다시 켬
+        if (mute && !steady()) h.postDelayed(unmuteMusic, 2500); // 무슨 일이 있어도 2.5초 뒤엔 다시 켬
     }
 
     private boolean tmapTalking() {
@@ -218,6 +255,7 @@ final class WakeWord {
         h.removeCallbacksAndMessages(null);
         if (musicMuted) h.postDelayed(unmuteMusic, Math.min(ms + 1500, 2500));
         h.postDelayed(this::listen, ms);
+        h.postDelayed(monitor, 150);
     }
 
     private final RecognitionListener listener = new RecognitionListener() {
@@ -302,6 +340,7 @@ final class WakeWord {
             stop();
             Intent i = new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (!rest.isEmpty()) i.putExtra("said", rest);
+            else i.putExtra("cmd", true); // "조아야"만 부름 → "네, 말씀하세요" (명령·목적지 모두 받음)
             act.startActivity(i);
             return true;
         }

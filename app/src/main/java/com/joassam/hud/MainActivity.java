@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
         p = getSharedPreferences("hud", MODE_PRIVATE);
         // 처음 쓰는 사람도 자동 모드는 기본으로 켜 둠
         if (!p.contains("auto_mode")) p.edit().putBoolean("auto_mode", true).apply();
+        DestActivity.prefetchFavs(this); // 아직 좌표가 없는 자주 가는 곳만 찾음
 
         ScrollView sv = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
@@ -395,6 +396,7 @@ public class MainActivity extends Activity {
         advanced.addView(check("시동 끄면 주차 전화번호 화면", "park_show", true));
         advanced.addView(check("시동 끄면 티맵 길안내도 종료", "stop_tmap", true));
         advanced.addView(check("운전 중 부르는 말로 목적지 바꾸기 (HUD 화면에서만 들음, 폰 42℃ 넘으면 쉼)", "wake_on", true));
+        advanced.addView(check("부르는 말 듣는 동안 '띵' 소리 막기 (티맵 안내 음성은 들림)", "ding_block", true));
         LinearLayout wrow = new LinearLayout(this);
         wrow.setOrientation(LinearLayout.HORIZONTAL);
         EditText wakeIn = new EditText(this);
@@ -705,6 +707,7 @@ public class MainActivity extends Activity {
         }
         p.edit().putString("favs", b.toString()).apply();
         refreshFavList();
+        DestActivity.prefetchFavs(this);
     }
 
     @Override
@@ -724,7 +727,8 @@ public class MainActivity extends Activity {
             String merged = FavImport.merge(p.getString("favs", ""), rows);
             p.edit().putString("favs", merged).apply();
             refreshFavList();
-            NavListenerService.log("자주 가는 곳 " + rows.size() + "곳 불러옴");
+            NavListenerService.log("자주 가는 곳 " + rows.size() + "곳 불러옴 → 좌표 미리 찾는 중");
+            DestActivity.prefetchFavs(this);
             Toast.makeText(this, rows.size() + "곳 등록됐어요 (같은 이름은 새 주소로 바뀜)", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(this, "불러오기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();

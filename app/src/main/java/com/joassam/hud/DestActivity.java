@@ -179,6 +179,8 @@ public class DestActivity extends Activity {
             List<String> l = new ArrayList<>();
             l.add(said0);
             handler.postDelayed(() -> heard(l), 600);
+        } else if (getIntent() != null && getIntent().getBooleanExtra("cmd", false)) {
+            handler.postDelayed(() -> ask("네, 말씀하세요"), 500);
         } else if (getIntent() != null && getIntent().getBooleanExtra("retry", false)) {
             handler.postDelayed(() -> ask("길안내가 시작되지 않았어요. 어디로 갈까요?"), 800);
         } else if (nextMode) handler.postDelayed(() -> ask("도착했어요. 다음 목적지 있으세요?"), 800);
@@ -268,6 +270,11 @@ public class DestActivity extends Activity {
     }
 
     private void heard(List<String> alts) {
+        // HUD가 떠 있으면 "뒤집어", "흰색으로", "티맵 꺼" 같은 명령도 여기서 받음
+        if (choices == null && HudActivity.command(alts.get(0))) {
+            finish();
+            return;
+        }
         if (!nextMode && choices == null && hudOnlyWord(alts.get(0))) {
             NavListenerService.log("음성 '" + alts.get(0) + "' → 목적지 없이 HUD");
             speak("목적지 없이 HUD를 켤게요", this::openHudOnly);
@@ -521,7 +528,7 @@ public class DestActivity extends Activity {
         saveRecent(dest2);
         status.setText("🔎 '" + dest2 + "'" + (addr.equals(dest2) ? "" : " (" + addr + ")") + " 찾는 중…");
         new Thread(() -> {
-            double[] ll = findLL(addr);
+            double[] ll = findLL(this, addr);
             runOnUiThread(() -> openTmap(addr.equals(dest2) ? dest2 : addr, dest2, ll));
         }).start();
     }
@@ -530,7 +537,8 @@ public class DestActivity extends Activity {
      * 좌표 찾기: ① 한 번 찾은 곳은 폰에 저장해 둔 좌표(인터넷 없이도 됨)
      *            ② 휴대폰 내장 주소 검색 ③ 오픈스트리트맵 주소 검색(무료, 키 없음)
      */
-    private double[] findLL(String q) {
+    static double[] findLL(android.content.Context c, String q) {
+        SharedPreferences p = c.getSharedPreferences("hud", MODE_PRIVATE);
         String key = "ll:" + q.replaceAll("\\s+", " ").trim();
         String saved = p.getString(key, "");
         if (!saved.isEmpty()) {
@@ -540,7 +548,7 @@ public class DestActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
-        double[] ll = geocode(q);
+        double[] ll = geocode(c, q);
         boolean approx = false;
         if (ll == null) {
             ll = osm(q);
@@ -592,17 +600,17 @@ public class DestActivity extends Activity {
     }
 
     /** 휴대폰 내장 주소 검색(무료)으로 좌표 찾기 */
-    private double[] geocode(String q) {
+    static double[] geocode(android.content.Context c, String q) {
         try {
             if (!Geocoder.isPresent()) {
                 NavListenerService.log("휴대폰 내장 주소 검색 없음 → 오픈스트리트맵으로 찾기");
                 return null;
             }
-            Geocoder g = new Geocoder(this, Locale.KOREA);
+            Geocoder g = new Geocoder(c, Locale.KOREA);
             List<Address> a = null;
             // 지금 위치 근처(약 50km)에서 먼저 찾기 → 같은 이름이 여러 곳이면 가까운 곳
             try {
-                android.location.LocationManager lm = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+                android.location.LocationManager lm = (android.location.LocationManager) c.getSystemService(LOCATION_SERVICE);
                 android.location.Location here = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER);
                 if (here == null) here = lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER);
                 if (here != null) {
@@ -744,6 +752,45 @@ public class DestActivity extends Activity {
     }
 
     /** 자주 가는 곳: 한 줄에 "이름=주소" */
+    /**
+     * 자주 가는 곳 좌표를 미리 찾아 저장 (엑셀 불러온 뒤·앱 켤 때 한 번).
+     * 한 번 저장되면 인터넷이 약한 곳에서도 바로 길안내. 오픈스트리트맵 규칙대로 1초에 한 곳씩.
+     */
+    static void prefetchFavs(android.content.Context ctx) {
+        if (prefetching) return;
+        prefetching = true;
+        final android.content.Context c = ctx.getApplicationContext();
+        new Thread(() -> {
+          try {
+            SharedPreferences sp = c.getSharedPreferences("hud", MODE_PRIVATE);
+            int ok = 0, fail = 0, already = 0;
+            List<String[]> fs = favorites(sp);
+            for (String[] f : fs) {
+                String key = "ll:" + f[1].replaceAll("\\s+", " ").trim();
+                if (!sp.getString(key, "").isEmpty()) {
+                    already++;
+                    continue;
+                }
+                double[] ll = findLL(c, f[1]);
+                if (ll != null) ok++;
+                else fail++;
+                try {
+                    Thread.sleep(1100);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            if (ok + fail > 0)
+                NavListenerService.log("자주 가는 곳 좌표 미리 저장: 새로 " + ok + "곳, 이미 " + already + "곳"
+                        + (fail > 0 ? ", 못 찾음 " + fail + "곳 (주소 확인 필요)" : ""));
+          } finally {
+            prefetching = false;
+          }
+        }, "fav-prefetch").start();
+    }
+
+    private static volatile boolean prefetching = false;
+
     static List<String[]> favorites(SharedPreferences p) {
         List<String[]> out = new ArrayList<>();
         for (String line : p.getString("favs", "").split("\n")) {
