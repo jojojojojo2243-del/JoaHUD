@@ -231,7 +231,7 @@ public class NavListenerService extends NotificationListenerService {
     /** 마지막으로 티맵 길안내 알림을 본 시각 (미니 창 되살리기 판단용) */
     static volatile long lastGuideSeen = 0;
 
-    private static String lastGuideDest = "";
+    static String lastGuideDest = "";
 
     /** 티맵 길안내 알림을 봄: 새 길안내가 시작된 거면 4초 뒤 HUD 띄우기 (티맵 화면이 앞에 있어도) */
     private void guideSeen(SharedPreferences p, String raw) {

@@ -325,18 +325,37 @@ final class WakeWord {
     };
 
     /** 들은 말 안에 부르는 말이 있으면 목적지 화면 (뒤에 이어진 말은 목적지로 넘김) */
+    /** 이어서 대화하기: 명령·대답 뒤 이 시각까지는 부르는 말 없이도 알아들음 */
+    static volatile long followUntil = 0;
+
+    /** "조아야"를 폰이 자주 이렇게 알아들음 → 뒤에 말이 이어질 때만 부르는 말로 인정 */
+    private static final String[] JOA_ALIAS = {"좋아요", "좋아야", "조아요", "좋아", "조아", "하이좋아", "하이조아"};
+
     private boolean check(List<String> heard) {
         SharedPreferences p = act.getSharedPreferences("hud", Activity.MODE_PRIVATE);
         String w = word(p).replace(" ", "");
+        // ① 이어서 대화하는 중: 부르는 말 없이 바로 명령·질문
+        if (System.currentTimeMillis() < followUntil && !heard.isEmpty()) {
+            String s0 = heard.get(0).trim();
+            if (!s0.isEmpty() && after(s0.replace(" ", ""), w) == null) {
+                NavListenerService.log("이어서 들음: \"" + s0 + "\"");
+                if (handle(s0, true)) return true;
+            }
+        }
         for (String s : heard) {
             String rest = after(s.replace(" ", ""), w);
+            if (rest == null && w.contains("조아")) {
+                for (String a : JOA_ALIAS) {
+                    String r = after(s.replace(" ", ""), a);
+                    if (r != null && !r.isEmpty()) {
+                        rest = r;
+                        break;
+                    }
+                }
+            }
             if (rest == null) continue;
             NavListenerService.log("부르는 말 들음: \"" + s + "\"");
-            // "조아야 뒤집어", "조아야 안내 종료" 같은 HUD 명령이면 바로 처리하고 계속 들음
-            if (!rest.isEmpty() && act instanceof HudActivity && ((HudActivity) act).voiceCommand(rest)) {
-                again(1500);
-                return true;
-            }
+            if (!rest.isEmpty() && handle(rest, false)) return true;
             stop();
             Intent i = new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (!rest.isEmpty()) i.putExtra("said", rest);
@@ -345,6 +364,27 @@ final class WakeWord {
             return true;
         }
         return false;
+    }
+
+    /**
+     * 부르는 말 뒤의 말 처리: ① 정해진 HUD 명령 ② AI 두뇌(키가 있으면) ③ 목적지.
+     * follow = 이어서 듣는 중 (이때는 명령·AI만, 아무 말이나 목적지로 보지 않음). 처리했으면 true
+     */
+    private boolean handle(String said, boolean follow) {
+        if (!(act instanceof HudActivity)) return false;
+        HudActivity hud = (HudActivity) act;
+        if (hud.voiceCommand(said)) {
+            followUntil = System.currentTimeMillis() + 20_000L;
+            again(1500);
+            return true;
+        }
+        if (Brain.enabled(act)) {
+            followUntil = System.currentTimeMillis() + 25_000L;
+            hud.askBrain(said);
+            again(2500);
+            return true;
+        }
+        return false; // follow 중이면 무시, 아니면 목적지로
     }
 
     /** said 안에서 부르는 말(발음이 비슷해도 됨)을 찾으면 그 뒤에 남은 말, 없으면 null */

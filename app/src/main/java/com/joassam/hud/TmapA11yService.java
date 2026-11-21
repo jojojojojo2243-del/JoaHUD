@@ -203,12 +203,23 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     /** 길안내 중 티맵 화면을 10초 동안 안 만지면 → 홈 → HUD */
+    /** 음성 "지도 보여"로 티맵을 연 경우 (이때는 길안내 중이 아니어도 15초 뒤 HUD로) */
+    static volatile long mapViewUntil = 0;
+
     private void checkTmapIdle() {
-        if (!TMAP.equals(fgPkg) || !mayReturnToHud()) return;
         long now = System.currentTimeMillis();
-        if (now - Math.max(lastTmapTouch, tmapFgSince) < 10_000L) return;
+        boolean mapView = now < mapViewUntil;
+        if (!TMAP.equals(fgPkg)) return;
+        if (!mapView && !mayReturnToHud()) return;
+        if (mapView && (HudActivity.visible || AutoService.parked())) return;
+        if (now - Math.max(lastTmapTouch, tmapFgSince) < (mapView ? 15_000L : 10_000L)) return;
         if (!tmapFull()) return;
         lastTmapTouch = now; // 한 번만
+        if (mapView) {
+            mapViewUntil = 0;
+            NavListenerService.openHudViaHome(this, "지도 보기 끝 → HUD로 돌아감");
+            return;
+        }
         NavListenerService.openHudViaHome(this, "티맵 화면을 10초 동안 안 만짐 → HUD로 돌아감");
     }
 

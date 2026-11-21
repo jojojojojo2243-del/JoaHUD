@@ -300,6 +300,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void askGeminiKey() {
+        EditText in = new EditText(this);
+        in.setHint("제미나이 API 키 붙여넣기 (AIza…)");
+        in.setText(Brain.key(this));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("AI 두뇌 (구글 제미나이)")
+                .setMessage("정해진 명령어 말고 자유롭게 말해도 알아듣게 해요.\n예) \"좀 눈부신데\" → 어둡게, \"하레하레로 가자\" → 길안내\n\n"
+                        + "1. aistudio.google.com 에 구글 계정으로 로그인\n2. [Get API key] → [Create API key]\n3. 키를 복사해서 여기에 붙여넣기\n\n"
+                        + "가벼운 모델(Flash-Lite)을 써서 무료 한도 안에서 쓰기 충분해요. 한도를 넘으면 그날은 정해진 명령만 돼요.")
+                .setView(in)
+                .setPositiveButton("저장", (dlg, w) -> {
+                    p.edit().putString("gemini_key", in.getText().toString().trim()).putBoolean("brain_on", true).apply();
+                    NavListenerService.log(in.getText().toString().trim().isEmpty() ? "AI 두뇌 꺼짐 (키 없음)" : "AI 두뇌 키 저장됨");
+                    Toast.makeText(this, "저장했어요. HUD에서 \"조아야 오늘 기분 어때\"처럼 말해 보세요", Toast.LENGTH_LONG).show();
+                    recreate();
+                })
+                .setNeutralButton("키 받는 페이지 열기", (dlg, w) ->
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/app/apikey"))))
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
     private void askPubKey() {
         EditText in = new EditText(this);
         in.setHint("공공데이터 인증키(Decoding 또는 Encoding) 붙여넣기");
@@ -380,6 +402,9 @@ public class MainActivity extends Activity {
         advanced.addView(check("녹색 바탕 빼고 화살표·글자만 보이기 (앞유리에 잘 비침, 끄면 티맵 원래 색)", "white_only", true));
         advanced.addView(check("길안내 중 티맵을 만지다 홈으로 나가거나 10초 안 만지면 HUD로 돌아가기", "tmap_back_hud", true));
         advanced.addView(check("HUD 밝기: 폰 자동 밝기 따르기 (끄면 항상 최대)", "auto_bright", true));
+        Button aiBtn = button(Brain.key(this).isEmpty() ? "AI 두뇌 켜기 (제미나이 키 입력, 무료)" : "AI 두뇌: 켜짐 (키 변경)");
+        aiBtn.setOnClickListener(v -> askGeminiKey());
+        advanced.addView(aiBtn);
         Button pubBtn = button("단속카메라 공공데이터 키 입력/변경");
         pubBtn.setOnClickListener(v -> askPubKey());
         advanced.addView(pubBtn);

@@ -284,6 +284,41 @@ public class HudActivity extends Activity {
         }
     };
 
+    /** 정해진 명령이 아닌 말 → AI 두뇌에게 물어 실행·대답 */
+    void askBrain(String said) {
+        NavListenerService.log("AI 두뇌에 물어봄: \"" + said + "\"");
+        StringBuilder sit = new StringBuilder();
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        sit.append(String.format(java.util.Locale.ROOT, "%d시 %d분, ", cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE)));
+        sit.append("속도 ").append(Math.round(Math.max(0, hud.speedNow()))).append("km/h, ");
+        sit.append(NavListenerService.tmapGuiding() && !NavListenerService.lastGuideDest.isEmpty()
+                ? "길안내 중(목적지 " + NavListenerService.lastGuideDest + "), " : "길안내 없음, ");
+        if (Alerts.inSection) sit.append("구간단속 중(평균 ").append(Alerts.sectionAvg()).append(", 제한 ").append(Alerts.sectionLimit).append("), ");
+        sit.append("글자색 ").append(COLOR_NAMES[prefs.getInt("color", 0) % COLORS.length]);
+        Brain.ask(this, said, sit.toString(), a -> {
+            if (isFinishing()) return;
+            if (!a.error.isEmpty()) {
+                say(a.error);
+                return;
+            }
+            if (!a.command.isEmpty() && voiceCommand(a.command)) {
+                NavListenerService.log("AI → 명령 '" + a.command + "'");
+                return;
+            }
+            if (!a.navigate.isEmpty()) {
+                NavListenerService.log("AI → 목적지 '" + a.navigate + "'");
+                say(a.say.isEmpty() ? a.navigate + "로 안내할게요" : a.say);
+                handler.postDelayed(() -> startActivity(new android.content.Intent(this, DestActivity.class)
+                        .putExtra("said", a.navigate).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)), 1500);
+                return;
+            }
+            if (!a.say.isEmpty()) {
+                NavListenerService.log("AI → \"" + a.say + "\"");
+                say(a.say);
+            }
+        });
+    }
+
     /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
     static boolean command(String said) {
         HudActivity a = current != null ? current.get() : null;
@@ -332,12 +367,21 @@ public class HudActivity extends Activity {
         return -1;
     }
 
-    /** 새로 늘린 음성 명령 (밝기·소리 크기·시간·속도·구간 평균·도움말·경고 켜고 끄기) */
+    /** 새로 늘린 음성 명령 (밝기·소리 크기·시간·속도·구간 평균·도움말·경고 켜고 끄기·지도 보기) */
     private String voiceCommandMore(String s) {
         android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+        if (has(s, "지도", "경로보여", "전체경로", "티맵보여", "티맵화면", "길보여")) {
+            android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TmapA11yService.TMAP);
+            if (t == null) return "티맵을 찾지 못했어요";
+            TmapA11yService.mapViewUntil = System.currentTimeMillis() + 60_000L;
+            startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            return "지도를 보여 드릴게요. 15초 지나면 HUD로 돌아와요";
+        }
         if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
-            return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 경로 다시, 목적지 바꿔, "
-                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜 예요";
+            return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 지도 보여, 경로 다시, 목적지 바꿔, "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜 예요. "
+                    + "명령 뒤 20초 동안은 부르는 말 없이 바로 말해도 돼요"
+                    + (Brain.enabled(this) ? ". 그 밖의 말은 AI가 알아들어요" : "");
         }
         if (has(s, "소리크게", "볼륨올", "볼륨크게", "소리키워", "크게말", "안내크게")) {
             am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_RAISE, 0);
@@ -427,7 +471,7 @@ public class HudActivity extends Activity {
     private static final String[] CANON = {
             "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
             "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
-            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜"};
+            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여"};
 
     private static String canon(String s) {
         if (s.length() > 8) return s;
