@@ -147,6 +147,9 @@ public class AutoService extends Service {
     private void showPark(int attempt) {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (ignOn) return; // 그사이 다시 시동 켜짐
+        VoiceService.stop(this); // 주차 중엔 마이크 끔
+        TmapA11yService.stopMapMode();
+        Brain.forget();
         if (p.getBoolean("auto_close", true) && HudActivity.visible) {
             HudActivity.closeIfOpen();
             NavListenerService.log("시동 꺼짐 → HUD 닫음");

@@ -288,6 +288,7 @@ public class NavListenerService extends NotificationListenerService {
      */
     static void openHudViaHome(android.content.Context c, String why) {
         if (AutoService.parked()) return; // 시동 꺼진 뒤엔 HUD를 다시 띄우지 않음
+        if (TmapA11yService.mapMode) return; // 지도 반사 모드 중엔 그대로 둠
         final android.content.Context app = c.getApplicationContext();
         Runnable open = () -> {
             try {

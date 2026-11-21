@@ -24,7 +24,7 @@ import java.util.List;
  */
 final class WakeWord {
 
-    private final Activity act;
+    private final android.content.Context act; // HUD 화면 또는 VoiceService (HUD 밖에서도 들음)
     private final Handler h = new Handler(Looper.getMainLooper());
     private SpeechRecognizer sr;
     private boolean on = false;
@@ -37,7 +37,7 @@ final class WakeWord {
     private boolean onDeviceWorked = false;
     static volatile String status = "";
 
-    WakeWord(Activity a) {
+    WakeWord(android.content.Context a) {
         act = a;
     }
 
@@ -67,6 +67,12 @@ final class WakeWord {
 
     void stop() {
         on = false;
+        try {
+            if (tts != null) tts.shutdown();
+        } catch (Exception ignored) {
+        }
+        tts = null;
+        ttsReady = false;
         h.removeCallbacksAndMessages(null);
         if (sr != null) {
             try {
@@ -194,7 +200,23 @@ final class WakeWord {
     }
 
     private void listen() {
-        if (!on || act.isFinishing()) return;
+        if (!on) return;
+        // 목적지 화면이 마이크를 쓰는 중이면 비켜 줌
+        if (DestActivity.visible) {
+            if (sr != null) {
+                try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
+                sr = null;
+            }
+            status = "목적지 화면이 듣는 중";
+            h.postDelayed(this::listen, 1500);
+            return;
+        }
+        // 시동 꺼짐(주차) 중엔 쉼
+        if (AutoService.parked()) {
+            status = "주차 중이라 쉼";
+            h.postDelayed(this::listen, 10_000);
+            return;
+        }
         float t = temp();
         if (hot && t < 39f) {
             hot = false;
@@ -327,6 +349,40 @@ final class WakeWord {
     /** 들은 말 안에 부르는 말이 있으면 목적지 화면 (뒤에 이어진 말은 목적지로 넘김) */
     /** 이어서 대화하기: 명령·대답 뒤 이 시각까지는 부르는 말 없이도 알아들음 */
     static volatile long followUntil = 0;
+    /** "조아야"만 불렀을 때: 이 시각까지 다음 말은 명령·AI·목적지 무엇이든 받음 (화면은 HUD 그대로) */
+    private long askedUntil = 0;
+
+    private android.speech.tts.TextToSpeech tts;
+    private boolean ttsReady = false;
+
+    /** 화면을 바꾸지 않고 소리로만 대답 */
+    private void speak(String msg) {
+        ttsUntil = System.currentTimeMillis() + 800 + msg.length() * 180L;
+        try {
+            if (tts == null) {
+                tts = new android.speech.tts.TextToSpeech(act.getApplicationContext(), st -> {
+                    ttsReady = st == android.speech.tts.TextToSpeech.SUCCESS;
+                    if (ttsReady && tts != null) {
+                        tts.setLanguage(java.util.Locale.KOREAN);
+                        tts.speak(msg, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "wake");
+                    }
+                });
+            } else if (ttsReady) {
+                tts.speak(msg, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "wake");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 목적지로 길안내 (이때만 목적지 화면을 띄움) */
+    private void goDest(String said) {
+        if (sr != null) {
+            try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
+            sr = null;
+        }
+        act.startActivity(new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("said", said));
+        again(3000);
+    }
 
     /** "조아야"를 폰이 자주 이렇게 알아들음 → 뒤에 말이 이어질 때만 부르는 말로 인정 */
     private static final String[] JOA_ALIAS = {"좋아요", "좋아야", "조아요", "좋아", "조아", "하이좋아", "하이조아"};
@@ -338,8 +394,15 @@ final class WakeWord {
         if (System.currentTimeMillis() < followUntil && !heard.isEmpty()) {
             String s0 = heard.get(0).trim();
             if (!s0.isEmpty() && after(s0.replace(" ", ""), w) == null) {
+                boolean asked = System.currentTimeMillis() < askedUntil;
+                askedUntil = 0;
                 NavListenerService.log("이어서 들음: \"" + s0 + "\"");
-                if (handle(s0, true)) return true;
+                if (handle(s0, !asked)) return true;
+                if (asked) { // "조아야" → "네" → "OO 가자": 이때만 목적지 화면
+                    NavListenerService.log("목적지로 봄: \"" + s0 + "\"");
+                    goDest(s0);
+                    return true;
+                }
             }
         }
         for (String s : heard) {
@@ -354,13 +417,20 @@ final class WakeWord {
                 }
             }
             if (rest == null) continue;
+            if (rest.replaceAll("[\\s.,!?~]", "").length() < 2) rest = ""; // "하이 좋아" → 남은 "아" 같은 찌꺼기는 버림
             NavListenerService.log("부르는 말 들음: \"" + s + "\"");
             if (!rest.isEmpty() && handle(rest, false)) return true;
-            stop();
-            Intent i = new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (!rest.isEmpty()) i.putExtra("said", rest);
-            else i.putExtra("cmd", true); // "조아야"만 부름 → "네, 말씀하세요" (명령·목적지 모두 받음)
-            act.startActivity(i);
+            if (!rest.isEmpty()) { // 명령도 AI도 아닌 말 → 목적지
+                goDest(rest);
+                return true;
+            }
+            // "조아야"만 부름 → 화면은 그대로 두고 소리로만 "네" 하고 다음 말을 기다림
+            NavListenerService.log("부르기만 함 → 화면 그대로, 다음 말 기다림");
+            long now = System.currentTimeMillis();
+            askedUntil = now + 12_000L;
+            followUntil = Math.max(followUntil, now + 12_000L);
+            speak("네");
+            again(900);
             return true;
         }
         return false;
@@ -371,16 +441,21 @@ final class WakeWord {
      * follow = 이어서 듣는 중 (이때는 명령·AI만, 아무 말이나 목적지로 보지 않음). 처리했으면 true
      */
     private boolean handle(String said, boolean follow) {
-        if (!(act instanceof HudActivity)) return false;
-        HudActivity hud = (HudActivity) act;
-        if (hud.voiceCommand(said)) {
+        // HUD가 뒤에 살아 있으면 바로, 없으면 HUD를 띄우면서 실행 (티맵·홈 화면에서 불러도 됨)
+        if (HudActivity.command(said)) {
             followUntil = System.currentTimeMillis() + 20_000L;
             again(1500);
             return true;
         }
         if (Brain.enabled(act)) {
             followUntil = System.currentTimeMillis() + 25_000L;
-            hud.askBrain(said);
+            HudActivity.brain(act, said);
+            again(2500);
+            return true;
+        }
+        if (!HudActivity.alive() && HudActivity.looksLikeCommand(said)) {
+            HudActivity.openWith(act, "voice", said); // HUD가 꺼져 있으면 띄운 뒤 명령 실행
+            followUntil = System.currentTimeMillis() + 20_000L;
             again(2500);
             return true;
         }

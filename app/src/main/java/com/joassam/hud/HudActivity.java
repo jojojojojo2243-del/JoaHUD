@@ -94,6 +94,16 @@ public class HudActivity extends Activity {
         super.onCreate(b);
         prefs = getSharedPreferences("hud", MODE_PRIVATE);
         current = new java.lang.ref.WeakReference<>(this);
+        // HUD 밖에서 부른 명령으로 HUD가 켜진 경우: 뜬 뒤 그 명령 실행
+        final String pendVoice = getIntent() != null ? getIntent().getStringExtra("voice") : null;
+        final String pendBrain = getIntent() != null ? getIntent().getStringExtra("brain") : null;
+        if (pendVoice != null || pendBrain != null) {
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (isFinishing()) return;
+                if (pendVoice != null && !voiceCommand(pendVoice)) say("잘 못 알아들었어요");
+                if (pendBrain != null) askBrain(pendBrain);
+            }, 1200);
+        }
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
@@ -286,6 +296,8 @@ public class HudActivity extends Activity {
 
     /** 정해진 명령이 아닌 말 → AI 두뇌에게 물어 실행·대답 */
     void askBrain(String said) {
+        // "아", "음" 같은 한 글자 소리는 AI에 보내지 않음 (무료 한도 아끼기)
+        if (said == null || said.replaceAll("[\\s.,!?~]", "").length() < 2) return;
         NavListenerService.log("AI 두뇌에 물어봄: \"" + said + "\"");
         StringBuilder sit = new StringBuilder();
         java.util.Calendar cal = java.util.Calendar.getInstance();
@@ -317,6 +329,34 @@ public class HudActivity extends Activity {
                 say(a.say);
             }
         });
+    }
+
+    static boolean alive() {
+        HudActivity a = current != null ? current.get() : null;
+        return a != null && !a.isFinishing();
+    }
+
+    /** HUD 밖에서 들은 자유로운 말 → AI 두뇌 (HUD가 없으면 띄우면서) */
+    static void brain(android.content.Context c, String said) {
+        HudActivity a = current != null ? current.get() : null;
+        if (a != null && !a.isFinishing()) a.askBrain(said);
+        else openWith(c, "brain", said);
+    }
+
+    /** HUD를 띄우고, 뜬 뒤 그 말을 명령(voice) 또는 AI(brain)로 처리 */
+    static void openWith(android.content.Context c, String kind, String said) {
+        try {
+            c.startActivity(new android.content.Intent(c, HudActivity.class).putExtra(kind, said)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 명령어처럼 들리는지 (HUD가 꺼져 있을 때 HUD를 띄울지 판단) */
+    static boolean looksLikeCommand(String said) {
+        String s = said.replace(" ", "");
+        return colorByName(s) >= 0 || has(s, "뒤집", "가로", "세로", "반전", "밝게", "어둡게", "크게", "작게", "소리", "볼륨",
+                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투");
     }
 
     /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
@@ -370,16 +410,58 @@ public class HudActivity extends Activity {
     /** 새로 늘린 음성 명령 (밝기·소리 크기·시간·속도·구간 평균·도움말·경고 켜고 끄기·지도 보기) */
     private String voiceCommandMore(String s) {
         android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
-        if (has(s, "지도", "경로보여", "전체경로", "티맵보여", "티맵화면", "길보여")) {
+        // 블루투스 켜고 끄기 ("블루" 가 하늘색으로 잘못 가지 않게 색보다 먼저)
+        if (has(s, "블루투스", "블루투수", "블루트스", "부루투스", "블투")) {
+            Boolean want = has(s, "꺼", "끄", "끊", "종료", "그만", "오프", "OFF") ? Boolean.FALSE
+                    : has(s, "켜", "키", "연결", "온", "ON", "시작") ? Boolean.TRUE : null;
+            return TmapA11yService.setBluetooth(want, m -> {
+                if (m != null && !isFinishing()) say(m);
+            });
+        }
+        if (has(s, "HUD켜", "HUD보여", "HUD로", "허드켜", "허드보여", "헤드업켜", "헤드업보여", "헤드업으로", "에이치유디켜")) {
+            TmapA11yService.stopMapMode();
+            startActivity(new android.content.Intent(this, HudActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            return "HUD를 보여 드릴게요";
+        }
+        if (has(s, "지도", "경로보여", "전체경로", "티맵보여", "티맵켜", "티맵화면", "길보여")) {
+            // 지도 모드에선 HUD 화면이 뒤로 가므로, 어느 화면에서나 듣는 서비스가 돌 때만 (그래야 "HUD 보여"로 돌아옴)
+            if (VoiceService.running && TmapA11yService.startMapMode()) return "티맵 지도를 뒤집어서 보여 드릴게요. 돌아갈 땐 HUD 보여 라고 하세요";
+            // 안드로이드 14 미만이면 뒤집기 없이 티맵만 띄움 (15초 뒤 HUD로)
             android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TmapA11yService.TMAP);
             if (t == null) return "티맵을 찾지 못했어요";
             TmapA11yService.mapViewUntil = System.currentTimeMillis() + 60_000L;
             startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
             return "지도를 보여 드릴게요. 15초 지나면 HUD로 돌아와요";
         }
+        // 지도 반사 모드 중 방향 바꾸기 (지도만 따로 돌림)
+        if (TmapA11yService.mapMode) {
+            int rot = prefs.getInt("map_rot", 0);
+            String r = null;
+            if (has(s, "뒤집", "거꾸로", "180도", "반대로")) { rot = (rot + 180) % 360; r = "지도를 뒤집었어요"; }
+            else if (has(s, "돌려", "회전", "90도")) { rot = (rot + 90) % 360; r = "지도를 돌렸어요"; }
+            else if (has(s, "가로")) { rot = (rot / 180) * 180 + 90; r = "지도를 가로로 돌렸어요"; }
+            else if (has(s, "세로")) { rot = (rot / 180) * 180; r = "지도를 세로로 돌렸어요"; }
+            else if (has(s, "좌우반전", "좌우바꿔", "거울")) {
+                prefs.edit().putBoolean("mirror_h", !prefs.getBoolean("mirror_h", true)).apply();
+                applyMirror();
+                TmapA11yService.mapTransformChanged();
+                return "좌우를 바꿨어요";
+            } else if (has(s, "상하반전", "위아래")) {
+                prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false)).apply();
+                applyMirror();
+                TmapA11yService.mapTransformChanged();
+                return "위아래를 바꿨어요";
+            }
+            if (r != null) {
+                prefs.edit().putInt("map_rot", rot % 360).apply();
+                TmapA11yService.mapTransformChanged();
+                return r;
+            }
+        }
         if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
             return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 지도 보여, 경로 다시, 목적지 바꿔, "
-                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜 예요. "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼 예요. "
                     + "명령 뒤 20초 동안은 부르는 말 없이 바로 말해도 돼요"
                     + (Brain.enabled(this) ? ". 그 밖의 말은 AI가 알아들어요" : "");
         }
@@ -471,7 +553,8 @@ public class HudActivity extends Activity {
     private static final String[] CANON = {
             "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
             "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
-            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여"};
+            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여",
+            "블루투스켜", "블루투스꺼"};
 
     private static String canon(String s) {
         if (s.length() > 8) return s;
@@ -666,9 +749,15 @@ public class HudActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
-        // 운전 중 "조아야" 부르면 목적지 바꾸기 (HUD가 떠 있을 때만 들음)
-        if (wake == null) wake = new WakeWord(this);
-        wake.start();
+        if (TmapA11yService.mapMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도 모드 끝
+        // "조아야" 듣기: 가능하면 HUD 밖(티맵·홈 화면)에서도 듣는 서비스로, 안 되면 HUD 화면에서만
+        VoiceService.start(this);
+        handler.postDelayed(() -> {
+            if (!VoiceService.running && visible) {
+                if (wake == null) wake = new WakeWord(this);
+                wake.start();
+            }
+        }, 1500);
         handler.removeCallbacks(heatCheck);
         handler.post(heatCheck);
     }

@@ -21,8 +21,9 @@ import java.util.ArrayDeque;
  * 키는 aistudio.google.com 에서 무료로 받음. 키가 없으면 이 기능은 쉼.
  */
 final class Brain {
-    static final String DEFAULT_MODEL = "gemini-flash-lite-latest";
-    private static final String FALLBACK_MODEL = "gemini-2.5-flash-lite";
+    static final String DEFAULT_MODEL = "gemini-3.5-flash-lite";
+    /** 앞 모델이 바쁘거나(503) 없어졌거나(404) 그 모델 한도가 찼으면(429) 다음 모델로 (모두 무료 등급) */
+    private static final String[] MODELS = {"gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"};
 
     /** 답: command(HUD 명령 문장) / navigate(목적지) / say(말할 문장) 중 채워진 것 */
     static final class Answer {
@@ -62,7 +63,7 @@ final class Brain {
                 + "- command: HUD를 조작해야 하면 아래 명령 중 하나를 그대로 적어. "
                 + "[뒤집어, 가로로, 세로로, 자동 회전, 좌우 반전, 상하 반전, 초록색, 흰색, 하늘색, 노란색, 주황색, 색 바꿔, "
                 + "크게(속도 글자), 작게(속도 글자), 밝게, 어둡게, 자동 밝기, 소리 크게, 소리 작게, 경고 꺼, 경고 켜, "
-                + "주차 번호 꺼, 주차 번호 켜, 지도 보여, 경로 다시, 목적지 바꿔, 안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝]\n"
+                + "주차 번호 꺼, 주차 번호 켜, 지도 보여, 경로 다시, 목적지 바꿔, 안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 블루투스 켜, 블루투스 꺼]\n"
                 + "- navigate: 어디로 가자고 하면 목적지 이름이나 주소. 자주 가는 곳 목록에 비슷한 게 있으면 그 이름을 그대로 써. "
                 + "자주 가는 곳: [" + favs + "]\n"
                 + "- say: 운전자에게 소리로 들려줄 한국어 한두 문장 (짧게, 존댓말, 20자 안팎). 명령을 실행할 때는 비워 둬도 돼.\n"
@@ -78,11 +79,18 @@ final class Brain {
             Answer a = new Answer();
             try {
                 SharedPreferences p = c.getSharedPreferences("hud", Context.MODE_PRIVATE);
-                String model = p.getString("gemini_model", DEFAULT_MODEL);
-                String raw = call(c, model, said, situation);
-                if (raw == null && !model.equals(FALLBACK_MODEL)) {
-                    raw = call(c, FALLBACK_MODEL, said, situation);
-                    if (raw != null) p.edit().putString("gemini_model", FALLBACK_MODEL).apply();
+                String saved = p.getString("gemini_model", DEFAULT_MODEL);
+                java.util.ArrayList<String> order = new java.util.ArrayList<>();
+                if (!saved.equals("gemini-2.5-flash-lite")) order.add(saved); // 2026-10 종료된 모델은 건너뜀
+                for (String m : MODELS) if (!order.contains(m)) order.add(m);
+                String raw = null;
+                for (String m : order) {
+                    raw = call(c, m, said, situation);
+                    if (raw != null) {
+                        if (!m.equals(saved)) p.edit().putString("gemini_model", m).apply();
+                        break;
+                    }
+                    if (lastCode == 400 || lastCode == 401 || lastCode == 403 || lastCode == -1) break; // 키 문제면 다른 모델도 같음
                 }
                 if (raw == null) {
                     a.error = lastError;
@@ -102,6 +110,7 @@ final class Brain {
     }
 
     private static String lastError = "";
+    private static int lastCode = 0;
 
     /** ```json ... ``` 같은 감싸기 제거 */
     private static String clean(String s) {
@@ -134,8 +143,7 @@ final class Brain {
             body.put("contents", contents);
             body.put("generationConfig", new JSONObject()
                     .put("responseMimeType", "application/json")
-                    .put("temperature", 0.3)
-                    .put("maxOutputTokens", 256));
+                    .put("maxOutputTokens", 1024));
 
             con = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/"
                     + model + ":generateContent").openConnection();
@@ -149,6 +157,7 @@ final class Brain {
                 out.write(body.toString().getBytes("UTF-8"));
             }
             int code = con.getResponseCode();
+            lastCode = code;
             if (code != 200) {
                 lastError = code == 429 ? "오늘 AI 무료 사용량을 다 썼어요. 정해진 명령은 계속 돼요"
                         : code == 400 || code == 401 || code == 403 ? "AI 키를 확인해 주세요"
@@ -164,6 +173,7 @@ final class Brain {
             for (int i = 0; i < parts.length(); i++) sb.append(parts.getJSONObject(i).optString("text", ""));
             return sb.toString();
         } catch (Exception e) {
+            lastCode = -1;
             lastError = "인터넷이 약해서 AI에 못 물어봤어요";
             return null;
         } finally {
