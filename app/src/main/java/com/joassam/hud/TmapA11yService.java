@@ -174,23 +174,118 @@ public class TmapA11yService extends AccessibilityService {
             }
         } catch (Throwable ignored) {
         }
-        final boolean ok = clicked;
-        NavListenerService.log(ok ? "빠른 설정 [블루투스] 누름" : "빠른 설정에서 [블루투스] 버튼을 못 찾음");
+        NavListenerService.log(clicked ? "빠른 설정 [블루투스] 누름" : "빠른 설정에서 [블루투스] 버튼을 못 찾음");
+        // ① 타일을 눌렀으면 1.8초 뒤 확인 → 안 바뀌었으면 ② 열린 상세 창의 스위치 → ③ 블루투스 설정 화면 스위치
+        handler.postDelayed(() -> btStage2(target, done), clicked ? 1800 : 300);
+    }
+
+    private void btStage2(boolean target, java.util.function.Consumer<String> done) {
+        Boolean st = btOn(this);
+        if (st != null && st == target) {
+            btClose();
+            btFinish(target, done, "빠른 설정");
+            return;
+        }
+        // 글자 쪽이 눌려 상세 창이 열린 경우: 그 안의 켜기/끄기 스위치
+        boolean sw = false;
+        try {
+            sw = btClickSwitch(target, false);
+        } catch (Throwable ignored) {
+        }
+        if (sw) NavListenerService.log("블루투스 상세 창 스위치 누름");
         handler.postDelayed(() -> {
-            if (Build.VERSION.SDK_INT >= 31) performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE);
-            else performGlobalAction(GLOBAL_ACTION_BACK);
-        }, ok ? 900 : 200);
-        handler.postDelayed(() -> {
-            Boolean st = btOn(this);
-            String msg = null;
-            if (st != null && st == target) NavListenerService.log("블루투스 " + (target ? "켜짐" : "꺼짐") + " 확인");
-            else {
-                msg = !ok ? "빠른 설정에서 블루투스 버튼을 못 찾았어요. 블루투스 버튼을 첫 페이지에 두세요"
-                        : "블루투스가 " + (target ? "안 켜졌어요" : "안 꺼졌어요");
-                NavListenerService.log("블루투스 바꾸기 실패 (지금 " + (st == null ? "알 수 없음" : st ? "켜짐" : "꺼짐") + ")");
+            Boolean st2 = btOn(this);
+            btClose();
+            if (st2 != null && st2 == target) {
+                btFinish(target, done, "상세 창");
+                return;
             }
-            if (done != null) done.accept(msg);
-        }, 3500);
+            btStage3(target, done);
+        }, sw ? 1800 : 200);
+    }
+
+    /** 마지막 방법: 블루투스 설정 화면을 열어 맨 위 스위치를 누르고 HUD로 돌아옴 */
+    private void btStage3(boolean target, java.util.function.Consumer<String> done) {
+        final boolean hudWasUp = HudActivity.alive();
+        try {
+            startActivity(new android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            NavListenerService.log("블루투스 설정 화면 열어서 스위치 누르기");
+        } catch (Throwable t) {
+            btFinish(target, done, null);
+            return;
+        }
+        handler.postDelayed(() -> {
+            boolean sw = false;
+            try {
+                sw = btClickSwitch(target, true);
+            } catch (Throwable ignored) {
+            }
+            if (sw) NavListenerService.log("블루투스 설정 스위치 누름");
+            handler.postDelayed(() -> {
+                performGlobalAction(GLOBAL_ACTION_BACK);
+                if (hudWasUp || mapMode) {
+                    try {
+                        startActivity(new android.content.Intent(this, HudActivity.class)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                    } catch (Throwable ignored) {
+                    }
+                }
+                handler.postDelayed(() -> btFinish(target, done, "설정 화면"), 1200);
+            }, sw ? 1500 : 300);
+        }, 1600);
+    }
+
+    private void btClose() {
+        if (Build.VERSION.SDK_INT >= 31) performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE);
+        else performGlobalAction(GLOBAL_ACTION_BACK);
+    }
+
+    private void btFinish(boolean target, java.util.function.Consumer<String> done, String how) {
+        Boolean st = btOn(this);
+        String msg = null;
+        if (st != null && st == target) {
+            NavListenerService.log("블루투스 " + (target ? "켜짐" : "꺼짐") + " 확인" + (how != null ? " (" + how + ")" : ""));
+            msg = target ? "블루투스 켰어요" : "블루투스 껐어요";
+        } else {
+            msg = "블루투스를 " + (target ? "못 켰어요" : "못 껐어요") + ". 기록을 보여 주세요";
+            NavListenerService.log("블루투스 바꾸기 실패 (지금 " + (st == null ? "알 수 없음" : st ? "켜짐" : "꺼짐") + ")");
+        }
+        if (done != null) done.accept(msg);
+    }
+
+    /** 블루투스 켜기/끄기 스위치(체크 가능한 칸)를 찾아 원하는 상태가 아니면 누름. settings=true면 설정 앱 화면에서 */
+    private boolean btClickSwitch(boolean target, boolean settings) {
+        for (AccessibilityWindowInfo w : getWindows()) {
+            AccessibilityNodeInfo root = w.getRoot();
+            if (root == null || root.getPackageName() == null) continue;
+            String pk = root.getPackageName().toString();
+            if (pk.equals(TMAP) || pk.equals(getPackageName())) continue;
+            if (settings != pk.contains("settings")) continue;
+            if (!settings) { // 빠른 설정 상세 창: 그 창에 '블루투스' 글자가 있어야 함
+                List<AccessibilityNodeInfo> l = root.findAccessibilityNodeInfosByText("블루투스");
+                List<AccessibilityNodeInfo> l2 = root.findAccessibilityNodeInfosByText("Bluetooth");
+                if ((l == null || l.isEmpty()) && (l2 == null || l2.isEmpty())) continue;
+            }
+            AccessibilityNodeInfo sw = findCheckable(root, 0);
+            if (sw == null) continue;
+            if (sw.isChecked() == target) return false; // 이미 원하는 상태로 보임
+            AccessibilityNodeInfo c = sw;
+            for (int i = 0; i < 4 && c != null && !c.isClickable(); i++) c = c.getParent();
+            if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+        }
+        return false;
+    }
+
+    /** 화면 위쪽부터 처음 나오는 체크 가능한 스위치 */
+    private static AccessibilityNodeInfo findCheckable(AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 14) return null;
+        if (n.isCheckable() && n.isVisibleToUser()) return n;
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo r = findCheckable(n.getChild(i), depth + 1);
+            if (r != null) return r;
+        }
+        return null;
     }
 
     private static boolean isBtLabel(CharSequence cs) {
@@ -220,7 +315,7 @@ public class TmapA11yService extends AccessibilityService {
                 if (c == null || !c.isVisibleToUser()) continue;
                 int sc = 0;
                 if (isBtLabel(c.getContentDescription())) sc += 2;   // 타일 전체에 붙은 이름
-                if (c.isCheckable()) sc += 2;                         // 켜짐/꺼짐 스위치
+                if (c.isCheckable()) sc += 3;                         // 켜짐/꺼짐 스위치 (글자만 누르면 상세 창이 열림)
                 CharSequence cl = c.getClassName();
                 if (cl != null && (cl.toString().contains("Switch") || cl.toString().contains("Button"))) sc += 1;
                 if (sc > bestScore) {
@@ -412,6 +507,13 @@ public class TmapA11yService extends AccessibilityService {
     private android.widget.ImageView mapView;
     private long mapLeftAt = 0;
 
+    /** 반반 화면: 삼성 분할 화면으로 위는 티맵(뒤집어 덮음), 아래는 HUD */
+    static volatile boolean splitMode = false;
+    /** 두 번 톡톡 → 이 시각까지 뒤집기를 풀어 실제 티맵을 만질 수 있게 */
+    private long peekUntil = 0;
+    private android.view.WindowManager.LayoutParams mapLp;
+    private final Rect mapRect = new Rect();
+
     /** 음성 "티맵 보여" */
     static boolean startMapMode() {
         TmapA11yService a = instance;
@@ -420,50 +522,119 @@ public class TmapA11yService extends AccessibilityService {
         return true;
     }
 
+    /** 음성 "반반 화면" */
+    static boolean startSplitMode() {
+        TmapA11yService a = instance;
+        if (a == null || Build.VERSION.SDK_INT < 34) return false;
+        a.handler.post(a::doStartSplit);
+        return true;
+    }
+
     /** 음성 "HUD 보여" */
     static void stopMapMode() {
         TmapA11yService a = instance;
         if (a != null) a.handler.post(a::doStopMap);
-        else mapMode = false;
+        else {
+            mapMode = false;
+            splitMode = false;
+        }
     }
 
     private void doStartMap() {
         android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
         if (t == null) return;
+        if (splitMode) { // 반반 → 지도 전체: 분할부터 풀고
+            splitMode = false;
+            removeOverlay();
+            performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
+            handler.postDelayed(this::doStartMap, 900);
+            return;
+        }
         mapMode = true;
         mapLeftAt = 0;
         startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        if (addOverlay(true)) NavListenerService.log("지도 반사 모드 켜짐 (돌아가려면 \"조아야 HUD 보여\", 만지려면 두 번 톡톡)");
+    }
+
+    private void doStartSplit() {
+        android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
+        if (t == null) return;
+        if (splitMode) return;
+        if (mapMode) removeOverlay(); // 지도 전체 → 반반
+        mapMode = true;
+        splitMode = true;
+        mapLeftAt = 0;
+        selfTmapUntil = System.currentTimeMillis() + 8000;
+        startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        // ① 티맵을 앞에 → ② 분할 화면 켜기(티맵이 위로) → ③ 아래 칸에 HUD
+        handler.postDelayed(() -> {
+            if (!splitMode) return;
+            boolean ok = performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
+            if (!ok) NavListenerService.log("분할 화면을 못 켬 (폰 설정의 '분할 화면' 확인)");
+            handler.postDelayed(() -> {
+                if (!splitMode) return;
+                try {
+                    startActivity(new android.content.Intent(this, HudActivity.class)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                    | android.content.Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT));
+                } catch (Throwable ignored) {
+                }
+                if (addOverlay(false)) NavListenerService.log("반반 화면 켜짐 (티맵 + HUD, 돌아가려면 \"조아야 HUD 보여\")");
+            }, 1300);
+        }, 1500);
+    }
+
+    /** 뒤집은 지도 그림을 덮는 창. full=화면 전체, 아니면 티맵 칸에만 (위치는 tickMap에서 맞춤) */
+    private boolean addOverlay(boolean full) {
         try {
             android.view.WindowManager wm = (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
             android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams(
-                    android.view.WindowManager.LayoutParams.MATCH_PARENT,
-                    android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                    full ? android.view.WindowManager.LayoutParams.MATCH_PARENT : 1,
+                    full ? android.view.WindowManager.LayoutParams.MATCH_PARENT : 1,
                     android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                             | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                             | android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     android.graphics.PixelFormat.OPAQUE);
+            lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
             if (Build.VERSION.SDK_INT >= 30)
                 lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             if (mapView == null) {
                 mapView = new android.widget.ImageView(this);
                 mapView.setBackgroundColor(android.graphics.Color.BLACK);
                 mapView.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+                // 두 번 톡톡 → 30초 동안 뒤집기 풀고 실제 티맵을 만질 수 있게
+                final android.view.GestureDetector gd = new android.view.GestureDetector(this,
+                        new android.view.GestureDetector.SimpleOnGestureListener() {
+                            @Override
+                            public boolean onDown(android.view.MotionEvent e) {
+                                return true;
+                            }
+
+                            @Override
+                            public boolean onDoubleTap(android.view.MotionEvent e) {
+                                peek(true);
+                                return true;
+                            }
+                        });
+                mapView.setOnTouchListener((v, e) -> gd.onTouchEvent(e));
+                mapLp = lp;
+                mapRect.setEmpty();
+                peekUntil = 0;
                 wm.addView(mapView, lp);
             }
             applyMapTransform();
-            NavListenerService.log("지도 반사 모드 켜짐 (돌아가려면 \"조아야 HUD 보여\")");
+            return true;
         } catch (Throwable t2) {
             mapMode = false;
+            splitMode = false;
             NavListenerService.log("지도 반사 모드 못 켬: " + t2.getMessage());
+            return false;
         }
     }
 
-    private void doStopMap() {
-        boolean was = mapMode;
-        mapMode = false;
+    private void removeOverlay() {
         if (mapView != null) {
             try {
                 ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).removeView(mapView);
@@ -471,7 +642,45 @@ public class TmapA11yService extends AccessibilityService {
             }
             mapView = null;
         }
-        if (was) NavListenerService.log("지도 반사 모드 꺼짐");
+        mapLp = null;
+        peekUntil = 0;
+    }
+
+    /** on=true: 덮개를 투명·통과로 (실제 티맵이 보이고 만져짐), false: 다시 뒤집은 그림 */
+    private void peek(boolean on) {
+        if (mapView == null || mapLp == null) return;
+        try {
+            if (on) {
+                peekUntil = System.currentTimeMillis() + 30_000L;
+                mapLp.alpha = 0f;
+                mapLp.flags |= android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                NavListenerService.log("두 번 톡톡 → 30초 동안 뒤집기 풀림 (만지는 동안 계속 풀려 있음)");
+            } else {
+                peekUntil = 0;
+                mapLp.alpha = 1f;
+                mapLp.flags &= ~android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
+            ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).updateViewLayout(mapView, mapLp);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void doStopMap() {
+        boolean was = mapMode, split = splitMode;
+        mapMode = false;
+        splitMode = false;
+        removeOverlay();
+        if (split) { // 분할 화면 풀고 HUD를 전체 화면으로
+            performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
+            handler.postDelayed(() -> {
+                try {
+                    startActivity(new android.content.Intent(this, HudActivity.class)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                } catch (Throwable ignored) {
+                }
+            }, 900);
+        }
+        if (was) NavListenerService.log(split ? "반반 화면 꺼짐" : "지도 반사 모드 꺼짐");
     }
 
     /** 좌우·상하 반전은 HUD 설정을 따르고, 회전은 지도만 따로 (음성 "뒤집어", "돌려") */
@@ -495,7 +704,15 @@ public class TmapA11yService extends AccessibilityService {
             doStopMap();
             return;
         }
-        if (!TMAP.equals(fgPkg)) {
+        // 두 번 톡톡으로 풀어 둔 동안: 티맵을 만지고 있으면 계속, 30초 손 안 대면 다시 뒤집기
+        if (peekUntil > 0) {
+            if (now - lastTmapTouch < 3000) peekUntil = Math.max(peekUntil, now + 30_000L);
+            if (now > peekUntil) peek(false);
+            else return;
+        }
+        if (splitMode) {
+            // 분할 화면에선 HUD 칸도 앞에 있으니 티맵을 다시 띄우지 않음
+        } else if (!TMAP.equals(fgPkg)) {
             // 티맵이 잠깐 뒤로 가면(알림 창 등) 기다리고, 5초 넘으면 다시 앞으로
             if (mapLeftAt == 0) mapLeftAt = now;
             else if (now - mapLeftAt > 5000) {
@@ -522,6 +739,25 @@ public class TmapA11yService extends AccessibilityService {
         } catch (Throwable ignored) {
         }
         if (id < 0) return;
+        if (splitMode && mapView != null && mapLp != null) {
+            // 덮개를 티맵 칸 자리·크기에 맞춤
+            Rect b = new Rect();
+            try {
+                for (AccessibilityWindowInfo w : getWindows()) if (w.getId() == id) w.getBoundsInScreen(b);
+            } catch (Throwable ignored) {
+            }
+            if (!b.isEmpty() && !b.equals(mapRect)) {
+                mapRect.set(b);
+                mapLp.x = b.left;
+                mapLp.y = b.top;
+                mapLp.width = b.width();
+                mapLp.height = b.height();
+                try {
+                    ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).updateViewLayout(mapView, mapLp);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
         busy = true;
         busySince = now;
         try {

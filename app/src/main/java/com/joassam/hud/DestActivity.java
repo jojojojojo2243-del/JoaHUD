@@ -200,6 +200,7 @@ public class DestActivity extends Activity {
     /** 소리로 말한 뒤 then 실행 (음성 출력이 안 되면 바로 실행) */
     private void speak(String text, Runnable then) {
         status.setText("🔊 " + text);
+        WakeWord.spoke(text);
         String id = "u" + System.nanoTime();
         afterId = id;
         after = then;

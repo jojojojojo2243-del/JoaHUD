@@ -356,7 +356,7 @@ public class HudActivity extends Activity {
     static boolean looksLikeCommand(String said) {
         String s = said.replace(" ", "");
         return colorByName(s) >= 0 || has(s, "뒤집", "가로", "세로", "반전", "밝게", "어둡게", "크게", "작게", "소리", "볼륨",
-                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투");
+                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투", "반반", "분할", "나눠");
     }
 
     /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
@@ -368,7 +368,7 @@ public class HudActivity extends Activity {
 
     private void say(String msg) {
         // 음성 명령 결과는 소리로만 (앞유리에 글자 안 띄움)
-        WakeWord.ttsUntil = System.currentTimeMillis() + 800 + msg.length() * 180L;
+        WakeWord.spoke(msg);
         try {
             if (tts == null) {
                 tts = new android.speech.tts.TextToSpeech(this, st -> {
@@ -424,6 +424,11 @@ public class HudActivity extends Activity {
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             return "HUD를 보여 드릴게요";
         }
+        if (has(s, "반반", "반씩", "화면나눠", "나눠서", "분할", "나눠보여", "같이보여", "둘다보여", "반쪽")) {
+            if (VoiceService.running && TmapA11yService.startSplitMode())
+                return "반은 티맵, 반은 HUD로 나눠 볼게요. 돌아갈 땐 HUD 보여 라고 하세요";
+            return "반반 화면은 어느 화면에서나 듣기가 켜져 있어야 돼요";
+        }
         if (has(s, "지도", "경로보여", "전체경로", "티맵보여", "티맵켜", "티맵화면", "길보여")) {
             // 지도 모드에선 HUD 화면이 뒤로 가므로, 어느 화면에서나 듣는 서비스가 돌 때만 (그래야 "HUD 보여"로 돌아옴)
             if (VoiceService.running && TmapA11yService.startMapMode()) return "티맵 지도를 뒤집어서 보여 드릴게요. 돌아갈 땐 HUD 보여 라고 하세요";
@@ -461,7 +466,7 @@ public class HudActivity extends Activity {
         }
         if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
             return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 지도 보여, 경로 다시, 목적지 바꿔, "
-                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼 예요. "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼, 반반 화면 이에요. "
                     + "명령 뒤 20초 동안은 부르는 말 없이 바로 말해도 돼요"
                     + (Brain.enabled(this) ? ". 그 밖의 말은 AI가 알아들어요" : "");
         }
@@ -554,7 +559,7 @@ public class HudActivity extends Activity {
             "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
             "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
             "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여",
-            "블루투스켜", "블루투스꺼"};
+            "블루투스켜", "블루투스꺼", "반반화면"};
 
     private static String canon(String s) {
         if (s.length() > 8) return s;
@@ -749,7 +754,7 @@ public class HudActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
-        if (TmapA11yService.mapMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도 모드 끝
+        if (TmapA11yService.mapMode && !TmapA11yService.splitMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도 모드 끝 (반반 화면은 그대로)
         // "조아야" 듣기: 가능하면 HUD 밖(티맵·홈 화면)에서도 듣는 서비스로, 안 되면 HUD 화면에서만
         VoiceService.start(this);
         handler.postDelayed(() -> {

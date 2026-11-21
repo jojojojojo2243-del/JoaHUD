@@ -276,8 +276,8 @@ public class HudView extends View {
 
         // 단속·위험 안내 문구가 있으면 오른쪽에 주황 삼각형 경고
         float[] sl = landSlots(w, h);
-        if (guiding && nav.limit > 0) drawLimit(c, sl[0], sl[1], sl[2]);
-        if (guiding && nav.sdiDist > 0) drawCamera(c, sl[3], sl[4], sl[5]);
+        if (guiding && nav.limit > 0 && !Alerts.inSection) drawLimit(c, sl[0], sl[1], sl[2]);
+        if (guiding && nav.sdiDist > 0 && !Alerts.inSection) drawCamera(c, sl[3], sl[4], sl[5]);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
         if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
             float tx = sl[3], ty = sl[4], ts = sl[5];
@@ -376,7 +376,7 @@ public class HudView extends View {
         c.drawText("km/h", cx + vw / 2f + sp * 0.05f, sy, text);
 
         // 오른쪽: 단속·위험 경고 삼각형
-        if (guiding && nav.limit > 0) drawLimit(c, w - pad - w * 0.08f, sy - sp * 0.35f, w * 0.08f);
+        if (guiding && nav.limit > 0 && !Alerts.inSection) drawLimit(c, w - pad - w * 0.08f, sy - sp * 0.35f, w * 0.08f);
         if (guiding && nav.sdiDist > 0) drawCamera(c, pad + w * 0.10f, sy - sp * 0.35f, w * 0.13f);
         String all = (nav != null ? nav.text + " " + nav.sub : "");
         if (guiding && nav.sdiDist <= 0 && nav.limit <= 0 && all.matches(".*(단속|카메라|과속|사고|위험|어린이|보호구역).*")) {
@@ -467,7 +467,7 @@ public class HudView extends View {
     private void drawPublicAlert(Canvas c, int w, int h, boolean landscape, boolean guiding) {
         // 티맵 공식 연동 정보가 있으면 그쪽을 그대로 씀
         drawSectionAvg(c, w, h, landscape);
-        if (!alertsOn) return;
+        if (!alertsOn || Alerts.inSection) return; // 구간단속 중엔 큰 구간 표지판만
         if (guiding && (nav.limit > 0 || nav.sdiDist > 0)) return;
         Alerts.Hit a = Alerts.now();
         if (a == null) return;
@@ -514,40 +514,93 @@ public class HudView extends View {
         }
     }
 
-    /** 구간단속 중: "구간 평균 72" (제한속도 넘으면 빨간색) */
+    /**
+     * 구간단속 중: 티맵처럼 크게
+     *   (구간 110) [ 403m ]      ← 빨간 원 + 빨간 칸(끝까지 남은 거리)
+     *              평균 98       ← 내 구간 평균 (제한 넘으면 빨갛게 깜빡)
+     */
     private void drawSectionAvg(Canvas c, int w, int h, boolean landscape) {
         if (!Alerts.inSection) return;
+        float left, top, size, maxW;
+        if (landscape) {
+            size = h * 0.32f;                    // 오른쪽 칸 위쪽 줄 (속도 숫자 위)
+            left = w * 0.60f + h * 0.04f;
+            top = h * 0.07f;
+            maxW = w - left - h * 0.04f;
+        } else {
+            size = w * 0.26f;                    // 가운데 (차로 그림과 속도 사이)
+            maxW = w * 0.88f;
+            left = (w - maxW) / 2f;
+            top = h * 0.555f - size * 0.75f;
+        }
+        drawSectionBadge(c, left, top, size, maxW);
+    }
+
+    private void drawSectionBadge(Canvas c, float left, float top, float size, float maxW) {
         int avg = Alerts.sectionAvg();
         int lim = Alerts.sectionLimit;
         boolean over = lim > 0 && avg > lim;
-        float cx, cy, ts;
-        if (landscape) {
-            cx = w * 0.80f; cy = h * 0.96f; ts = h * 0.07f; // 맨 아래 (속도 숫자 밑)
-        } else {
-            cx = w / 2f; cy = h * 0.555f; ts = w * 0.065f;
-        }
         int remain = Alerts.sectionRemain();
-        String rs = remain < 0 ? "" : remain >= 1000 ? String.format(java.util.Locale.ROOT, "%.1fkm", remain / 1000f) : (remain / 10 * 10) + "m";
-        String avgS = avg < 0 ? "--" : String.valueOf(avg);
-        String s;
-        if (remain >= 0 && remain < 800) s = "구간단속 끝 " + rs + "  평균 " + avgS + (lim > 0 ? "/" + lim : "");
-        else s = "구간 평균 " + avgS + (lim > 0 ? "/" + lim : "") + (remain >= 0 ? "  끝까지 " + rs : "");
-        // 칸 안에 다 들어가게 글자 크기 줄임 (오른쪽 끝 잘림 방지)
-        float maxW = landscape ? w * 0.38f - ts * 0.8f : w * 0.92f - ts * 0.8f;
+        float r = size / 2f, cx = left + r, cy = top + r;
+
+        // ① 빨간 테두리 원: "구간" + 제한속도
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Color.WHITE);
+        c.drawCircle(cx, cy, r, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(r * 0.20f);
+        p.setColor(Color.rgb(230, 50, 20));
+        c.drawCircle(cx, cy, r * 0.90f, p);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setColor(Color.BLACK);
+        text.setTextSize(r * 0.36f);
+        c.drawText("구간", cx, cy - r * 0.30f, text);
+        String ls = lim > 0 ? String.valueOf(lim) : "--";
+        text.setTextSize(r * (ls.length() >= 3 ? 0.78f : 0.95f));
+        c.drawText(ls, cx, cy + r * 0.52f, text);
+
+        // ② 오른쪽: 빨간 칸(남은 거리) + 내 평균
+        float x0 = left + size + size * 0.10f;
+        float iw = Math.max(size * 0.6f, left + maxW - x0);
+        float ix = x0 + iw / 2f;
+        String rs = remain < 0 ? "구간단속"
+                : remain >= 1000 ? String.format(Locale.ROOT, "%.1fkm", remain / 1000f) : (remain / 10 * 10) + "m";
+        float bh = size * 0.40f;
+        Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bg.setColor(Color.rgb(220, 40, 30));
+        c.drawRoundRect(new RectF(x0, top, x0 + iw, top + bh), bh * 0.18f, bh * 0.18f, bg);
+        float ts = bh * 0.78f;
         text.setTextSize(ts);
-        while (text.measureText(s) > maxW && ts > 8) {
+        while (text.measureText(rs) > iw * 0.92f && ts > 8) {
             ts *= 0.92f;
             text.setTextSize(ts);
         }
+        text.setColor(Color.WHITE);
+        c.drawText(rs, ix, top + bh / 2f + ts * 0.36f, text);
+
+        String avgS = avg < 0 ? "--" : String.valueOf(avg);
+        float lab = size * 0.16f;
+        float num = size * 0.50f;
+        text.setTextSize(num);
+        float nw = text.measureText(avgS);
+        text.setTextSize(lab);
+        float lw = text.measureText("평균 ");
+        float scale = Math.min(1f, iw * 0.98f / (nw + lw));
+        num *= scale;
+        lab *= scale;
+        float base = top + size * 0.98f;
+        float startX = ix - (nw + lw) * scale / 2f;
+        int numColor = over
+                ? ((System.currentTimeMillis() / 400) % 2 == 0 ? Color.rgb(255, 40, 40) : Color.rgb(255, 150, 150))
+                : color;
+        text.setTextAlign(Paint.Align.LEFT);
+        text.setTextSize(lab);
+        text.setColor(over ? numColor : Color.LTGRAY);
+        c.drawText("평균 ", startX, base, text);
+        text.setTextSize(num);
+        text.setColor(numColor);
+        c.drawText(avgS, startX + lw * scale, base, text);
         text.setTextAlign(Paint.Align.CENTER);
-        float tw = text.measureText(s);
-        if (landscape) cx = Math.min(cx, w - tw / 2f - ts * 0.6f);
-        Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bg.setColor(over ? Color.rgb(200, 20, 20) : Color.rgb(40, 40, 40));
-        c.drawRoundRect(new RectF(cx - tw / 2f - ts * 0.4f, cy - ts * 1.05f, cx + tw / 2f + ts * 0.4f, cy + ts * 0.35f),
-                ts * 0.3f, ts * 0.3f, bg);
-        text.setColor(over ? Color.WHITE : Color.rgb(255, 170, 60));
-        c.drawText(s, cx, cy, text);
     }
 
     /** 제한속도 표지판 (빨간 테두리 원) */

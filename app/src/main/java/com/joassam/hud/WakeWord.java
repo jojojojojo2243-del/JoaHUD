@@ -59,6 +59,9 @@ final class WakeWord {
         }
         restoreMusic(act);
         on = true;
+        alive();
+        stallH.removeCallbacks(stallCheck);
+        stallH.postDelayed(stallCheck, 30_000L);
         errors = 0;
         muteBeep(true);
         h.postDelayed(this::listen, 1500);
@@ -67,6 +70,7 @@ final class WakeWord {
 
     void stop() {
         on = false;
+        stallH.removeCallbacks(stallCheck);
         try {
             if (tts != null) tts.shutdown();
         } catch (Exception ignored) {
@@ -122,6 +126,41 @@ final class WakeWord {
 
     /** 앱이 음성으로 답하는 동안(ms) 미디어 소리를 켜 둠 */
     static volatile long ttsUntil = 0;
+    /** 앱이 마지막으로 소리 내어 한 말 (자기 목소리를 명령으로 다시 알아듣지 않게) */
+    private static volatile String lastSaid = "";
+    private static volatile long lastSaidAt = 0;
+
+    /** 앱이 말하기 직전에 부름: 말하는 동안 + 끝난 뒤 잠깐은 듣지 않고, 같은 말이 들리면 버림 */
+    static void spoke(String msg) {
+        if (msg == null) return;
+        long now = System.currentTimeMillis();
+        ttsUntil = now + 1000 + msg.length() * 200L;
+        lastSaid = msg;
+        lastSaidAt = now;
+    }
+
+    private static String normEcho(String s) {
+        return s == null ? "" : s.replaceAll("[\\s.,!?~'\"]", "");
+    }
+
+    private static java.util.HashSet<String> bigrams(String s) {
+        java.util.HashSet<String> b = new java.util.HashSet<>();
+        for (int i = 0; i + 1 < s.length(); i++) b.add(s.substring(i, i + 2));
+        return b;
+    }
+
+    /** 들은 말이 방금 앱이 한 말과 거의 같으면 true */
+    static boolean isEcho(String heard) {
+        if (System.currentTimeMillis() - lastSaidAt > 20_000L) return false;
+        String h = normEcho(heard), m = normEcho(lastSaid);
+        if (h.length() < 3 || m.length() < 3) return false;
+        if (m.contains(h) && h.length() >= m.length() * 0.6) return true;
+        java.util.HashSet<String> bh = bigrams(h), bm = bigrams(m);
+        int both = 0;
+        for (String x : bh) if (bm.contains(x)) both++;
+        // 양쪽 다 많이 겹쳐야 메아리 ("블루투스 켜" ↔ "블루투스를 켤게요"는 메아리 아님)
+        return bh.size() > 0 && bm.size() > 0 && both >= bh.size() * 0.6 && both >= bm.size() * 0.6;
+    }
     private int activeMs = 0;
     private long holdUntil = 0;
     private final Runnable monitor = new Runnable() {
@@ -199,8 +238,42 @@ final class WakeWord {
         return b == null ? 0 : b.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10f;
     }
 
+    /** 듣기가 멈춘 채로 남는 것 막기: 마지막으로 듣기를 시작하거나 인식기가 답한 시각 */
+    private volatile long lastAlive = 0;
+    private long musicWaitSince = 0;
+    private long lastErrLog = 0;
+    private long lastStallLog = 0;
+
+    private void alive() {
+        lastAlive = System.currentTimeMillis();
+    }
+
+    /** 30초마다 검사: 45초 넘게 듣기가 안 돌면 인식기를 새로 만들어 다시 시작 */
+    private final Runnable stallCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (!on) return;
+            long now = System.currentTimeMillis();
+            if (lastAlive > 0 && now - lastAlive > 45_000L && !DestActivity.visible && !AutoService.parked() && !hot) {
+                if (now - lastStallLog > 120_000L) {
+                    lastStallLog = now;
+                    NavListenerService.log("부르는 말 듣기가 멈춰 있어서 다시 시작" + (TmapA11yService.mapMode ? " (지도 화면 중)" : ""));
+                }
+                if (sr != null) {
+                    try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
+                    sr = null;
+                }
+                musicWaitSince = 0;
+                again(300);
+            }
+            stallH.postDelayed(this, 30_000L);
+        }
+    };
+    private final Handler stallH = new Handler(android.os.Looper.getMainLooper());
+
     private void listen() {
         if (!on) return;
+        alive();
         // 목적지 화면이 마이크를 쓰는 중이면 비켜 줌
         if (DestActivity.visible) {
             if (sr != null) {
@@ -231,9 +304,14 @@ final class WakeWord {
             return;
         }
         if (tmapTalking()) { // 티맵 안내 음성 중엔 '띵'이 겹치지 않게 끝날 때까지 기다림
-            h.postDelayed(this::listen, 1000);
-            return;
-        }
+            long now = System.currentTimeMillis();
+            if (musicWaitSince == 0) musicWaitSince = now;
+            // 소리가 15초 넘게 계속 나면(티맵이 앞에 있을 때 등) 안내 음성이 아니라고 보고 그냥 들음
+            if (now - musicWaitSince < 15_000L) {
+                h.postDelayed(this::listen, 1000);
+                return;
+            }
+        } else musicWaitSince = 0;
         try {
             if (sr == null) {
                 onDevice = false;
@@ -304,15 +382,30 @@ final class WakeWord {
 
         @Override
         public void onResults(Bundle b) {
+            alive();
             errors = 0;
             if (onDevice) onDeviceWorked = true;
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            long nowR = System.currentTimeMillis();
+            if (r != null && !r.isEmpty() && (nowR < ttsUntil + 1200 || isEcho(r.get(0)))) {
+                // 앱이 방금 한 말(예: "블루투스가 안 켜졌어요")을 다시 듣고 명령으로 착각하지 않게 버림
+                NavListenerService.log("앱 자기 목소리라 무시: \"" + r.get(0) + "\"");
+                again(400);
+                return;
+            }
             if (r != null && check(r)) return;
             again(200);
         }
 
         @Override
         public void onError(int e) {
+            alive();
+            long nowE = System.currentTimeMillis();
+            if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && nowE - lastErrLog > 60_000L) {
+                lastErrLog = nowE;
+                NavListenerService.log("부르는 말 인식 오류 " + e + (e == 3 || e == 8
+                        ? " (마이크를 다른 앱이 쓰는 중 — 티맵 '아리아' 호출이 켜져 있으면 끄세요)" : ""));
+            }
             // 폰 안 인식기가 한국어를 못 하거나 연결이 안 되면 → 구글 인식기로 바꿈
             if (onDevice && !onDeviceWorked && (e == 5 || e == 11 || e == 12 || e == 13 || e == 14)) {
                 onDeviceFailed = true;
@@ -357,7 +450,7 @@ final class WakeWord {
 
     /** 화면을 바꾸지 않고 소리로만 대답 */
     private void speak(String msg) {
-        ttsUntil = System.currentTimeMillis() + 800 + msg.length() * 180L;
+        spoke(msg);
         try {
             if (tts == null) {
                 tts = new android.speech.tts.TextToSpeech(act.getApplicationContext(), st -> {
