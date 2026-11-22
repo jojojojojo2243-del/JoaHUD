@@ -35,6 +35,7 @@ final class WakeWord implements VoskEar.Listener {
     private boolean usingVosk = false;
     /** 마지막으로 들은 말이 계속 듣는 귀에서 왔나 (목적지는 정확한 인식기로 다시 물음) */
     private boolean heardByVosk = false;
+    private long lastIgnoredLog = 0;
     /** 마이크 소리 크기 (기록용) */
     static volatile int micLevel = 0;
     /** 앱이 말하는 중 "하이 조아"가 들리면 말을 끊음 (HUD가 등록) */
@@ -418,7 +419,8 @@ final class WakeWord implements VoskEar.Listener {
             return;
         }
         // 시동 꺼짐(주차) 중엔 쉼
-        if (AutoService.parked()) {
+        // 시동 꺼진 뒤엔 쉼 — 단, HUD 화면을 직접 띄워 둔 동안은 들음 (집에서 시험할 때 등)
+        if (AutoService.parked() && !HudActivity.visible) {
             status = "주차 중이라 쉼";
             h.postDelayed(this::listen, 10_000);
             return;
@@ -718,6 +720,10 @@ final class WakeWord implements VoskEar.Listener {
         if (!called && now >= followUntil) {
             String n = text.replace(" ", "");
             if (n.contains("조아") || n.contains("좋아")) NavListenerService.log("부르는 말 아님(한 마디만): \"" + text + "\"");
+            else if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
+                lastIgnoredLog = now;
+                NavListenerService.log("들렸지만 부르는 말 없음: \"" + text + "\"");
+            }
             return;
         }
         // 앱이 말하는 중·직후에 들린 건 자기 목소리 (부르는 말이 들어 있으면 끼어들기로 봄)

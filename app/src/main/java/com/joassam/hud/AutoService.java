@@ -71,6 +71,9 @@ public class AutoService extends Service {
     static volatile long offAt = 0;
 
     /** 시동이 꺼진 상태(꺼진 지 30분 안) → HUD를 자동으로 다시 띄우면 안 됨 */
+    /** 시동 켜진 시각 (HUD가 뜨기까지 걸린 시간 기록용) */
+    static volatile long ignOnAt = 0;
+
     static boolean parked() {
         return !ignOn && offAt > 0 && System.currentTimeMillis() - offAt < 30 * 60_000L;
     }
@@ -134,6 +137,8 @@ public class AutoService extends Service {
         offAt = 0;
         NavListenerService.log("🔑 시동 켜짐(충전 시작)");
         updateNoti("🚗 운행 중");
+        ignOnAt = System.currentTimeMillis();
+        VoskEar.preload(this);
         driveDnd(true);
         if (HudActivity.visible || DestActivity.visible) return;
         Intent i;

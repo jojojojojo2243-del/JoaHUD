@@ -789,6 +789,11 @@ public class HudActivity extends Activity {
         visible = true;
         if (TmapA11yService.mapMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도·반반 모드 끝
         // "조아야" 듣기: 가능하면 HUD 밖(티맵·홈 화면)에서도 듣는 서비스로, 안 되면 HUD 화면에서만
+        if (AutoService.ignOnAt > 0) { // 시동 뒤 HUD가 뜨기까지 걸린 시간 (느리다는 말 확인용)
+            NavListenerService.log(String.format(java.util.Locale.ROOT, "HUD 화면 뜸 (시동 후 %.1f초)",
+                    (System.currentTimeMillis() - AutoService.ignOnAt) / 1000f));
+            AutoService.ignOnAt = 0;
+        }
         VoiceService.start(this);
         handler.postDelayed(() -> {
             if (!VoiceService.running && visible) {

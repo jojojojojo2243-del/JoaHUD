@@ -54,6 +54,16 @@ final class VoskEar {
     private volatile boolean on = false;
     private volatile boolean paused = false;
     private Thread thread;
+    private long statAt = System.currentTimeMillis();
+    private int statMax = 0, statOpens = 0, statHeard = 0;
+
+    /** 시동 켜질 때 미리 모델을 불러 둠 → HUD가 뜨자마자 바로 들을 수 있게 */
+    static void preload(Context c) {
+        if (model != null || broken || !modelReady(c)) return;
+        if (!c.getSharedPreferences("hud", Context.MODE_PRIVATE).getBoolean("vosk_on", true)) return;
+        final Context app = c.getApplicationContext();
+        new Thread(() -> loadModel(app), "joa-model-load").start();
+    }
 
     // ───────── 모델 ─────────
 
@@ -238,7 +248,7 @@ final class VoskEar {
             long lastStat = 0;
             int peak = 0;
             while (on) {
-                if (paused || WakeWord.hotNow || AutoService.parked() || DestActivity.visible) {
+                if (paused || WakeWord.hotNow || (AutoService.parked() && !HudActivity.visible) || DestActivity.visible) {
                     if (gate) {
                         gate = false;
                         rz.reset();
@@ -263,7 +273,17 @@ final class VoskEar {
                 }
                 // 소음 바닥은 조용할 때만 천천히 따라감
                 if (!gate) floor = floor * 0.97 + Math.min(rms, floor * 3) * 0.03;
-                boolean loud = rms > floor * 2.0 + 120;
+                boolean loud = rms > floor * 1.6 + 60; // 대시보드 위 폰이라 말소리가 작게 들어와도 열리게
+                statMax = Math.max(statMax, (int) rms);
+                if (loud && !gate) statOpens++;
+                if (now - statAt > 60_000L) { // 1분마다 듣는 상태 한 줄 (문제 찾기용)
+                    NavListenerService.log("듣는 중: 소리 최대 " + statMax + ", 주변 소음 " + (int) floor
+                            + ", 말소리 감지 " + statOpens + "번, 알아들은 말 " + statHeard + "개");
+                    statAt = now;
+                    statMax = 0;
+                    statOpens = 0;
+                    statHeard = 0;
+                }
                 if (!gate) {
                     ring[ringPos] = java.util.Arrays.copyOf(buf, n);
                     ringPos = (ringPos + 1) % ring.length;
@@ -325,6 +345,7 @@ final class VoskEar {
 
     private void deliver(String t) {
         if (t == null || t.trim().isEmpty()) return;
+        statHeard++;
         final String s = t.trim();
         main.post(() -> {
             Listener l = listener;
