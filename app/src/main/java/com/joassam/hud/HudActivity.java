@@ -94,6 +94,12 @@ public class HudActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        WakeWord.shutUp = () -> { // 앱이 말하는 중 "하이 조아" → 말 멈춤 (끼어들기)
+            try {
+                if (tts != null) tts.stop();
+            } catch (Exception ignored) {
+            }
+        };
         prefs = getSharedPreferences("hud", MODE_PRIVATE);
         current = new java.lang.ref.WeakReference<>(this);
         // HUD 밖에서 부른 명령으로 HUD가 켜진 경우: 뜬 뒤 그 명령 실행

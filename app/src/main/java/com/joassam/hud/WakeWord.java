@@ -22,13 +22,23 @@ import java.util.List;
  * HUD 화면이 떠 있는 동안만 듣고, 폰이 뜨거우면(42℃ 이상) 쉬었다가 39℃ 아래로 내려가면 다시 들음.
  * "조아야 집" 처럼 이어서 말하면 바로 그곳으로 안내.
  */
-final class WakeWord {
+final class WakeWord implements VoskEar.Listener {
 
     private final android.content.Context act; // HUD 화면 또는 VoiceService (HUD 밖에서도 들음)
     private final Handler h = new Handler(Looper.getMainLooper());
     private SpeechRecognizer sr;
     private boolean on = false;
     private boolean hot = false;
+    /** 계속 듣는 귀(VoskEar)도 보는 '뜨거움' 상태 */
+    static volatile boolean hotNow = false;
+    /** 계속 듣는 귀를 쓰는 중 */
+    private boolean usingVosk = false;
+    /** 마지막으로 들은 말이 계속 듣는 귀에서 왔나 (목적지는 정확한 인식기로 다시 물음) */
+    private boolean heardByVosk = false;
+    /** 마이크 소리 크기 (기록용) */
+    static volatile int micLevel = 0;
+    /** 앱이 말하는 중 "하이 조아"가 들리면 말을 끊음 (HUD가 등록) */
+    static volatile Runnable shutUp;
     private int errors = 0;
     private int savedSystemVol = -1;
     /** 폰 안 인식기(소리 없음)를 쓰는 중인지. 안 되면 구글 인식기로 바꾸고 기억함 */
@@ -183,6 +193,8 @@ final class WakeWord {
 
     void stop() {
         on = false;
+        if (usingVosk) VoskEar.stopAll();
+        usingVosk = false;
         stopExt();
         stallH.removeCallbacks(stallCheck);
         try {
@@ -235,7 +247,7 @@ final class WakeWord {
      * 티맵 안내 음성(0.3초 넘게 이어지는 소리)이나 앱 음성 답이 나올 때만 켬. 짧은 '띵'은 묻힘.
      */
     private boolean steady() {
-        return on && !onDevice && act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ding_block", true);
+        return on && !onDevice && !usingVosk && act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ding_block", true);
     }
 
     /** 앱이 음성으로 답하는 동안(ms) 미디어 소리를 켜 둠 */
@@ -414,15 +426,38 @@ final class WakeWord {
         float t = temp();
         if (hot && t < 39f) {
             hot = false;
+            hotNow = false;
             NavListenerService.log("폰 온도 " + t + "℃ → 부르는 말 다시 듣기");
         } else if (!hot && t >= 42f) {
             hot = true;
+            hotNow = true;
             NavListenerService.log("폰이 뜨거움 " + t + "℃ → 부르는 말 듣기 잠시 멈춤");
         }
         if (hot) {
             status = "폰이 뜨거워 쉬는 중 (" + t + "℃)";
             h.postDelayed(this::listen, 30_000);
             return;
+        }
+        // ── 계속 듣는 귀 (모델이 있으면): 끊기는 틈 없이 듣고, 티맵이 앞에 있어도 들음 ──
+        if (VoskEar.usable(act)) {
+            if (!usingVosk) {
+                usingVosk = true;
+                if (sr != null) {
+                    try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
+                    sr = null;
+                }
+                stopExt();
+                h.removeCallbacks(quietRestart);
+                musicMute(false);
+            }
+            VoskEar.start(act, this);
+            status = "'" + word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)) + "' 계속 듣는 중";
+            h.postDelayed(this::listen, 10_000); // 10초마다 온도·상태만 확인
+            return;
+        }
+        if (usingVosk) {
+            usingVosk = false;
+            VoskEar.stopAll();
         }
         if (tmapTalking()) { // 티맵 안내 음성 중엔 '띵'이 겹치지 않게 끝날 때까지 기다림
             long now = System.currentTimeMillis();
@@ -650,16 +685,90 @@ final class WakeWord {
 
     /** 목적지로 길안내 (이때만 목적지 화면을 띄움) */
     private void goDest(String said) {
+        if (heardByVosk) {
+            // 계속 듣는 귀는 짧은 명령엔 충분하지만 장소 이름은 틀리기 쉬움 → 목적지 화면이 정확한 인식기로 다시 물음
+            NavListenerService.log("장소 이름은 정확한 인식기로 다시 물어봄");
+            said = null;
+        }
         if (sr != null) {
             try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
             sr = null;
         }
-        act.startActivity(new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("said", said));
+        Intent di = new Intent(act, DestActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (said != null) di.putExtra("said", said);
+        else di.putExtra("where", true);
+        act.startActivity(di);
         again(3000);
     }
 
     /** "조아야"를 폰이 자주 이렇게 알아들음 → 뒤에 말이 이어질 때만 부르는 말로 인정 */
     private static final String[] JOA_ALIAS = {"좋아요", "좋아야", "조아요", "좋아", "조아", "하이좋아", "하이조아"};
+
+    // ───── 계속 듣는 귀에서 온 말 ─────
+
+    @Override
+    public void onHeard(String text) {
+        if (!on || !usingVosk) return;
+        alive();
+        micAliveAt = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
+        String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
+        boolean called = strongWake(text, w) && after(text.replace(" ", ""), w) != null;
+        // "좋아" 한 마디(옆 사람·라디오)로는 반응 안 함: "하이 조아"처럼 두 마디가 다 들려야 부르는 말
+        if (!called && now >= followUntil) {
+            String n = text.replace(" ", "");
+            if (n.contains("조아") || n.contains("좋아")) NavListenerService.log("부르는 말 아님(한 마디만): \"" + text + "\"");
+            return;
+        }
+        // 앱이 말하는 중·직후에 들린 건 자기 목소리 (부르는 말이 들어 있으면 끼어들기로 봄)
+        if (!called && (now < ttsUntil + 800 || isEcho(text))) return;
+        // 따라 듣는 중에 들린 티맵 안내 음성 ("잠시 후 우회전입니다")은 명령이 아님
+        if (!called && now < followUntil && isNavVoice(text)) return;
+        NavListenerService.log("들음: \"" + text + "\"");
+        heardByVosk = true;
+        java.util.ArrayList<String> l = new java.util.ArrayList<>();
+        l.add(text);
+        check(l);
+        heardByVosk = false;
+    }
+
+    @Override
+    public void onPartial(String text) {
+        if (!on || !usingVosk) return;
+        long now = System.currentTimeMillis();
+        if (now >= ttsUntil) return;
+        // 끼어들기: 앱이 말하는 중에 "하이 조아"가 들리면 바로 말을 멈춤
+        String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
+        if (strongWake(text, w)) {
+            ttsUntil = 0;
+            try {
+                if (tts != null) tts.stop();
+                Runnable r = shutUp;
+                if (r != null) r.run();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** 계속 듣는 귀가 멈춤(마이크·모델 문제) → 예전 방식으로 */
+    void earStopped() {
+        if (!on) return;
+        usingVosk = false;
+        again(800);
+    }
+
+    /** "하이 조아"(또는 설정한 부르는 말)가 확실히 들어 있나 — "좋아" 한 마디는 아님 */
+    static boolean strongWake(String text, String w) {
+        String s = text.replace(" ", "");
+        if (!w.isEmpty() && !w.equals("조아야") && s.contains(w)) return true;
+        if (s.contains("조아야")) return true;
+        return s.matches(".*(하이|아이|화이|타이|헤이|하이요)(조아|좋아|조와|죠아|좋와|조아야|좋아야).*");
+    }
+
+    private static boolean isNavVoice(String t) {
+        String s = t.replace(" ", "");
+        return s.endsWith("입니다") || s.contains("잠시후") || s.contains("전방") || s.contains("미터앞") || s.contains("경로를");
+    }
 
     private boolean check(List<String> heard) {
         SharedPreferences p = act.getSharedPreferences("hud", Activity.MODE_PRIVATE);

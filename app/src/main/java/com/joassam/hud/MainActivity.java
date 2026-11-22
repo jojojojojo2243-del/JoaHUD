@@ -440,6 +440,7 @@ public class MainActivity extends Activity {
         advanced.addView(wrow);
         advanced.addView(check("목적지 도착하면 '다음 목적지 있으세요?' 묻기", "ask_next", true));
         advanced.addView(check("단순 모드: 화면은 말할 때만 바뀜 (HUD 하나만, 자동 전환 끔)", "simple_mode", true));
+        advanced.addView(check("'하이 조아' 끊기지 않고 계속 듣기 (폰 안 음성 모델, 처음 한 번 82MB 받음)", "vosk_on", true));
         advanced.addView(check("운전 중(시동 켜짐) 다른 알림 막기 (방해 금지)", "drive_dnd", true));
         android.app.NotificationManager dndNm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         boolean dndOk = dndNm != null && dndNm.isNotificationPolicyAccessGranted();

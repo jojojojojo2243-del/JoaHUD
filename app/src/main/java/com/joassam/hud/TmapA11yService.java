@@ -645,12 +645,40 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     /**
-     * 티맵 화면에서 반반 칸에 넣을 부분: 가로 티맵은 왼쪽 안내판~차(가운데쯤)까지 78%, 세로 티맵은
-     * 위 30%~아래 90% (차는 아래쪽 80% 근처, 맨 아래 정보줄은 뺌). 칸에는 비율 유지해서 줄여 넣음.
+     * 반반 지도 칸 채우기 (사진으로 잰 티맵 화면 배치 기준):
+     *  - 가로 티맵: 내 차 ≈ (가로 65%, 세로 79%), 회전 안내판 ≈ 왼쪽 위 (0~30%, 10~55%), 도착 정보 ≈ 왼쪽 아래 (0~37%, 83~100%)
+     *  - 세로 티맵: 내 차 ≈ (50%, 73%), 회전 안내판 ≈ 위 (0~62%, 3~21%), 도착 정보 ≈ 아래 (0~100%, 85~95%)
+     * 지도는 칸을 꽉 채우게(빈칸 없이) 차를 중심으로 잘라 넣고, 잘려 나간 안내판·도착 정보는 칸 구석에 따로 붙임.
      */
-    static Rect splitSrc(int bw, int bh) {
-        if (bw > bh) return new Rect(0, 0, Math.round(bw * 0.78f), bh);
-        return new Rect(0, Math.round(bh * 0.30f), bw, Math.round(bh * 0.90f));
+    static Rect splitSrc(int bw, int bh, float boxAspect) {
+        boolean land = bw > bh;
+        float carX = land ? 0.65f : 0.50f, carY = land ? 0.79f : 0.73f;
+        int cw, ch;
+        if (bw / (float) bh > boxAspect) {
+            ch = bh;
+            cw = Math.round(bh * boxAspect);
+        } else {
+            cw = bw;
+            ch = Math.round(bw / boxAspect);
+        }
+        // 차가 칸의 가로 가운데, 세로 75% 쯤 (앞쪽 경로가 위로 넉넉히 보이게)
+        int left = Math.round(bw * carX - cw * 0.5f);
+        int top = Math.round(bh * carY - ch * 0.75f);
+        left = Math.max(0, Math.min(bw - cw, left));
+        top = Math.max(0, Math.min(bh - ch, top));
+        return new Rect(left, top, left + cw, top + ch);
+    }
+
+    /** 회전 안내판 자리 (티맵 화면 안) */
+    static Rect turnCardSrc(int bw, int bh) {
+        return bw > bh ? new Rect(0, Math.round(bh * 0.10f), Math.round(bw * 0.30f), Math.round(bh * 0.55f))
+                : new Rect(0, Math.round(bh * 0.03f), Math.round(bw * 0.62f), Math.round(bh * 0.21f));
+    }
+
+    /** 도착 시간·남은 거리 칸 자리 (티맵 화면 안) */
+    static Rect infoSrc(int bw, int bh) {
+        return bw > bh ? new Rect(0, Math.round(bh * 0.83f), Math.round(bw * 0.37f), bh)
+                : new Rect(0, Math.round(bh * 0.85f), bw, Math.round(bh * 0.95f));
     }
 
     static Rect fitCenter(int sw, int sh, Rect box) {
@@ -658,6 +686,14 @@ public class TmapA11yService extends AccessibilityService {
         int dw = Math.round(sw * sc), dh = Math.round(sh * sc);
         int x = box.left + (box.width() - dw) / 2, y = box.top + (box.height() - dh) / 2;
         return new Rect(x, y, x + dw, y + dh);
+    }
+
+    /** src 일부를 box 안에 비율 유지해서 (왼쪽/아래 붙임) */
+    private static Rect place(Rect src, Rect box, boolean bottom) {
+        float sc = Math.min(box.width() / (float) src.width(), box.height() / (float) src.height());
+        int dw = Math.round(src.width() * sc), dh = Math.round(src.height() * sc);
+        int y = bottom ? box.bottom - dh : box.top;
+        return new Rect(box.left, y, box.left + dw, y + dh);
     }
 
     /**
@@ -678,10 +714,24 @@ public class TmapA11yService extends AccessibilityService {
         if (d instanceof android.graphics.drawable.BitmapDrawable) {
             android.graphics.Bitmap b = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
             if (b != null && !b.isRecycled() && b.getWidth() > 0 && b.getHeight() > 0) {
-                Rect src = splitSrc(b.getWidth(), b.getHeight());
-                Rect dst = fitCenter(src.width(), src.height(), mapR);
+                int bw = b.getWidth(), bh = b.getHeight();
                 android.graphics.Paint pf = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
-                c.drawBitmap(b, src, dst, pf);
+                // ① 지도: 칸을 꽉 채움 (차 중심)
+                Rect src = splitSrc(bw, bh, mapR.width() / (float) mapR.height());
+                c.drawBitmap(b, src, mapR, pf);
+                // ② 잘려 나간 회전 안내판·도착 정보를 칸 구석에 붙임 (이미 칸 안에 보이면 안 붙임)
+                Rect card = turnCardSrc(bw, bh), info = infoSrc(bw, bh);
+                int m = Math.round(Math.min(mapR.width(), mapR.height()) * 0.02f);
+                if (!src.contains(card)) {
+                    Rect box = new Rect(mapR.left + m, mapR.top + m, mapR.left + Math.round(mapR.width() * (land ? 0.46f : 0.62f)),
+                            mapR.top + Math.round(mapR.height() * (land ? 0.44f : 0.30f)));
+                    c.drawBitmap(b, card, place(card, box, false), pf);
+                }
+                if (!src.contains(info)) {
+                    Rect box = new Rect(mapR.left + m, mapR.bottom - Math.round(mapR.height() * (land ? 0.20f : 0.13f)),
+                            mapR.right - m, mapR.bottom - m);
+                    c.drawBitmap(b, info, place(info, box, true), pf);
+                }
             }
         }
         HudView.drawHalf(c, hudR.left, hudR.top, hudR.width(), hudR.height());

@@ -174,7 +174,8 @@ public class DestActivity extends Activity {
         // 손 안 대고: 소리로 "어디로 갈까요?" → 듣기
         nextMode = getIntent() != null && getIntent().getBooleanExtra("next", false);
         String said0 = getIntent() != null ? getIntent().getStringExtra("said") : null;
-        boolean cmd0 = getIntent() != null && getIntent().getBooleanExtra("cmd", false);
+        boolean where0 = getIntent() != null && getIntent().getBooleanExtra("where", false);
+        boolean cmd0 = where0 || (getIntent() != null && getIntent().getBooleanExtra("cmd", false));
         resumeMode = getIntent() != null && getIntent().getBooleanExtra("resume", false);
         // 티맵이 이미 길안내 중이면 저절로 뜬 목적지 물음은 하지 않음 (화면이 왔다 갔다 꼬이는 것 막기)
         if ((said0 == null || said0.trim().isEmpty()) && !cmd0 && NavListenerService.tmapGuiding()) {
@@ -195,6 +196,8 @@ public class DestActivity extends Activity {
             List<String> l = new ArrayList<>();
             l.add(said0);
             handler.postDelayed(() -> heard(l), 600);
+        } else if (where0) { // 말로 "○○ 가자" → 장소 이름은 정확한 인식기로 다시 들음
+            handler.postDelayed(() -> ask("어디로 갈까요?"), 500);
         } else if (getIntent() != null && getIntent().getBooleanExtra("cmd", false)) {
             handler.postDelayed(() -> ask("네, 말씀하세요"), 500);
         } else if (getIntent() != null && getIntent().getBooleanExtra("retry", false)) {
