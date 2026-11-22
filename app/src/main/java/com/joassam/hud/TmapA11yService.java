@@ -158,7 +158,8 @@ public class TmapA11yService extends AccessibilityService {
             DestActivity.fireWatchdogNow();
             return;
         }
-        // ② 꼬인 화면
+        // ② 꼬인 화면 (단순 모드에선 저절로 안 함 — "조아야 정리해"로)
+        if (AutoService.simple(this)) return;
         boolean odd = AutoService.ignOn && !AutoService.parked() && guiding() && !mapMode
                 && !HudActivity.visible && !DestActivity.visible && !MainActivity.visible && !ParkActivity.visible
                 && !TMAP.equals(fgPkg) && now > autoStartUntil && now > selfTmapUntil && AutoService.carState == 0;
@@ -459,7 +460,7 @@ public class TmapA11yService extends AccessibilityService {
         long now = System.currentTimeMillis();
         return !mapMode && guiding() && !AutoService.parked() && now > autoStartUntil && now > selfTmapUntil
                 && !HudActivity.visible && !DestActivity.visible && !MainActivity.visible && !ParkActivity.visible
-                && AutoService.carState == 0
+                && AutoService.carState == 0 && !AutoService.simple(this)
                 && getSharedPreferences("hud", MODE_PRIVATE).getBoolean("tmap_back_hud", true);
     }
 
@@ -607,45 +608,75 @@ public class TmapA11yService extends AccessibilityService {
     private void doStartMap() {
         android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
         if (t == null) return;
-        if (splitMode) { // 반반 → 지도 전체: 분할부터 풀고
+        if (mapMode && splitMode) { // 반반 → 지도 전체
             splitMode = false;
-            removeOverlay();
-            performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
-            handler.postDelayed(this::doStartMap, 900);
+            applyMapTransform();
+            if (mapView != null) mapView.invalidate();
+            NavListenerService.log("반반 → 지도 전체 화면");
             return;
         }
         mapMode = true;
+        splitMode = false;
         mapLeftAt = 0;
         startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         if (addOverlay(true)) NavListenerService.log("지도 반사 모드 켜짐 (돌아가려면 \"조아야 HUD 보여\", 만지려면 두 번 톡톡)");
     }
 
+    /**
+     * 반반 화면: 티맵을 앞에 띄우고(작은 안내 창 없이 지도 전체가 그려짐) 그 위 덮개 한 장에
+     * 한쪽은 뒤집은 티맵 지도, 다른 쪽은 HUD(속도·구간단속·경고·시계)를 같이 그림.
+     * 삼성 분할 화면은 쓰지 않음 (검은 칸·잘린 HUD·작은 창이 보이던 문제)
+     */
     private void doStartSplit() {
         android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TMAP);
         if (t == null) return;
-        if (splitMode) return;
-        if (mapMode) removeOverlay(); // 지도 전체 → 반반
-        mapMode = true;
         splitMode = true;
+        if (mapMode && mapView != null) { // 지도 전체 → 반반
+            applyMapTransform();
+            mapView.invalidate();
+            NavListenerService.log("지도 전체 → 반반 화면");
+            return;
+        }
+        mapMode = true;
         mapLeftAt = 0;
-        selfTmapUntil = System.currentTimeMillis() + 8000;
         startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
-        // ① 티맵을 앞에 → ② 분할 화면 켜기(티맵이 위로) → ③ 아래 칸에 HUD
-        handler.postDelayed(() -> {
-            if (!splitMode) return;
-            boolean ok = performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
-            if (!ok) NavListenerService.log("분할 화면을 못 켬 (폰 설정의 '분할 화면' 확인)");
-            handler.postDelayed(() -> {
-                if (!splitMode) return;
-                try {
-                    startActivity(new android.content.Intent(this, HudActivity.class)
-                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                    | android.content.Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT));
-                } catch (Throwable ignored) {
+        if (addOverlay(true)) NavListenerService.log("반반 화면 켜짐 (티맵 지도 + HUD, 돌아가려면 \"조아야 HUD 보여\")");
+        else splitMode = false;
+    }
+
+    /** 반반 화면 그리기: 가로면 왼쪽 지도·오른쪽 HUD, 세로면 위 지도·아래 HUD */
+    private void drawSplit(android.graphics.Canvas c, int w, int h, android.graphics.drawable.Drawable d) {
+        c.drawColor(android.graphics.Color.BLACK);
+        boolean land = w > h;
+        Rect mapR = land ? new Rect(0, 0, (int) (w * 0.55f), h) : new Rect(0, 0, w, (int) (h * 0.52f));
+        Rect hudR = land ? new Rect(mapR.right, 0, w, h) : new Rect(0, mapR.bottom, w, h);
+        if (d instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.Bitmap b = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+            if (b != null && !b.isRecycled() && b.getWidth() > 0 && b.getHeight() > 0) {
+                // 칸 비율에 맞게 잘라 냄: 내 차(티맵 화면 가운데쯤)가 칸 안에 들어오게,
+                // 가로면 왼쪽(안내판 쪽)을 더 살리고, 세로면 위(안내판)~차 위치까지
+                float ta = mapR.width() / (float) mapR.height();
+                int bw = b.getWidth(), bh = b.getHeight();
+                Rect src;
+                if (bw / (float) bh > ta) {
+                    int cw = Math.round(bh * ta);
+                    int left = Math.max(0, Math.min(bw - cw, Math.round(bw * 0.5f - cw * 0.9f)));
+                    src = new Rect(left, 0, left + cw, bh);
+                } else {
+                    int ch = Math.round(bw / ta);
+                    int top = Math.max(0, Math.min(bh - ch, Math.round(bh * 0.68f - ch * 0.85f)));
+                    src = new Rect(0, top, bw, top + ch);
                 }
-                if (addOverlay(false)) NavListenerService.log("반반 화면 켜짐 (티맵 + HUD, 돌아가려면 \"조아야 HUD 보여\")");
-            }, 1300);
-        }, 1500);
+                android.graphics.Paint pf = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+                c.drawBitmap(b, src, mapR, pf);
+            }
+        }
+        HudView.drawHalf(c, hudR.left, hudR.top, hudR.width(), hudR.height());
+        // 가운데 구분선
+        android.graphics.Paint ln = new android.graphics.Paint();
+        ln.setColor(android.graphics.Color.rgb(60, 60, 60));
+        if (land) c.drawRect(mapR.right - 2, 0, mapR.right + 2, h, ln);
+        else c.drawRect(0, mapR.bottom - 2, w, mapR.bottom + 2, ln);
     }
 
     /** 뒤집은 지도 그림을 덮는 창. full=화면 전체, 아니면 티맵 칸에만 (위치는 tickMap에서 맞춤) */
@@ -665,7 +696,17 @@ public class TmapA11yService extends AccessibilityService {
             if (Build.VERSION.SDK_INT >= 30)
                 lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             if (mapView == null) {
-                mapView = new android.widget.ImageView(this);
+                mapView = new android.widget.ImageView(this) {
+                    @Override
+                    protected void onDraw(android.graphics.Canvas cv) {
+                        if (!splitMode) {
+                            super.onDraw(cv);
+                            return;
+                        }
+                        drawSplit(cv, getWidth(), getHeight(), getDrawable());
+                        postInvalidateDelayed(500); // HUD 칸(속도) 새로 그림
+                    }
+                };
                 mapView.setBackgroundColor(android.graphics.Color.BLACK);
                 mapView.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
                 // 두 번 톡톡 → 30초 동안 뒤집기 풀고 실제 티맵을 만질 수 있게
@@ -735,16 +776,6 @@ public class TmapA11yService extends AccessibilityService {
         mapMode = false;
         splitMode = false;
         removeOverlay();
-        if (split) { // 분할 화면 풀고 HUD를 전체 화면으로
-            performGlobalAction(7 /* GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN */);
-            handler.postDelayed(() -> {
-                try {
-                    startActivity(new android.content.Intent(this, HudActivity.class)
-                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-                } catch (Throwable ignored) {
-                }
-            }, 900);
-        }
         if (was) NavListenerService.log(split ? "반반 화면 꺼짐" : "지도 반사 모드 꺼짐");
     }
 
@@ -754,7 +785,8 @@ public class TmapA11yService extends AccessibilityService {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         mapView.setScaleX(p.getBoolean("mirror_h", true) ? -1f : 1f);
         mapView.setScaleY(p.getBoolean("flip_v", false) ? -1f : 1f);
-        mapView.setRotation(p.getInt("map_rot", 0));
+        int rot = p.getInt("map_rot", 0);
+        mapView.setRotation(splitMode && rot % 180 != 0 ? 0 : rot); // 반반에선 90도 돌리기는 안 함 (180도 뒤집기만)
     }
 
     static void mapTransformChanged() {
@@ -784,9 +816,7 @@ public class TmapA11yService extends AccessibilityService {
             if (now > peekUntil) peek(false);
             else return;
         }
-        if (splitMode) {
-            // 분할 화면에선 HUD 칸도 앞에 있으니 티맵을 다시 띄우지 않음
-        } else if (!TMAP.equals(fgPkg)) {
+        if (!TMAP.equals(fgPkg)) {
             // 티맵이 잠깐 뒤로 가면(알림 창 등) 기다리고, 5초 넘으면 다시 앞으로
             if (mapLeftAt == 0) mapLeftAt = now;
             else if (now - mapLeftAt > 5000) {
@@ -813,25 +843,6 @@ public class TmapA11yService extends AccessibilityService {
         } catch (Throwable ignored) {
         }
         if (id < 0) return;
-        if (splitMode && mapView != null && mapLp != null) {
-            // 덮개를 티맵 칸 자리·크기에 맞춤
-            Rect b = new Rect();
-            try {
-                for (AccessibilityWindowInfo w : getWindows()) if (w.getId() == id) w.getBoundsInScreen(b);
-            } catch (Throwable ignored) {
-            }
-            if (!b.isEmpty() && !b.equals(mapRect)) {
-                mapRect.set(b);
-                mapLp.x = b.left;
-                mapLp.y = b.top;
-                mapLp.width = b.width();
-                mapLp.height = b.height();
-                try {
-                    ((android.view.WindowManager) getSystemService(WINDOW_SERVICE)).updateViewLayout(mapView, mapLp);
-                } catch (Throwable ignored) {
-                }
-            }
-        }
         busy = true;
         busySince = now;
         try {

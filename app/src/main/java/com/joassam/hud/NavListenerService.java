@@ -209,11 +209,15 @@ public class NavListenerService extends NotificationListenerService {
         long started = guideStartAt;
         guideStartAt = 0;
         if (!TmapA11yService.TMAP.equals(pkg)) return;
-        if (!getSharedPreferences("hud", MODE_PRIVATE).getBoolean("ask_next", true)) return;
         if (now - stoppingTmapAt < 15_000L) return;                 // 시동 끄면서 끈 것
         if (AutoService.ignOn) DestActivity.clearResume(this);       // 운행 중 안내가 끝남(도착) → 가던 곳 잊기
+        if (!getSharedPreferences("hud", MODE_PRIVATE).getBoolean("ask_next", true)) return;
         if (!(AutoService.ignOn || AutoService.carState != 0)) return; // 운행 중이 아님
         if (started == 0 || now - started < 60_000L) return;          // 너무 짧은 안내(취소 등)
+        if (AutoService.simple(this)) { // 단순 모드: 도착해도 화면 안 바꿈
+            log("목적지 도착 (단순 모드 → HUD 그대로, 다음 목적지는 말로)");
+            return;
+        }
         handler.postDelayed(() -> {
             if (DestActivity.visible) return;
             if (tmapGuiding()) { // 경로를 다시 짜느라 알림이 잠깐 사라졌던 것 → 안내 계속 중
@@ -251,6 +255,8 @@ public class NavListenerService extends NotificationListenerService {
         lastGuideSeen = now;
         if (guideStartAt == 0) guideStartAt = now;
         if (!newSession || !p.getBoolean("tmap_auto_hud", true)) return;
+        // 단순 모드: 내가 말한 목적지로 시작된 안내일 때만 HUD로 (티맵에서 직접 시작한 건 그대로 둠)
+        if (AutoService.simple(this) && now - destFlowAt > 5 * 60_000L) return;
         handler.postDelayed(() -> {
             if (HudActivity.visible || DestActivity.visible || MainActivity.visible) return;
             try {
@@ -275,6 +281,7 @@ public class NavListenerService extends NotificationListenerService {
         if (HudActivity.visible || MainActivity.visible || DestActivity.visible) return;
         long now = System.currentTimeMillis();
         boolean fromDest = now - destFlowAt < 5 * 60_000L;
+        if (!fromDest && AutoService.simple(this)) return; // 단순 모드: 저절로 HUD 안 띄움
         if (!fromDest && TmapA11yService.TMAP.equals(TmapA11yService.fgPkg)) return; // 티맵 화면을 보고 있는 중
         if (!fromDest && now - lastAutoOpen < 60000) return;
         if (fromDest) destFlowAt = 0;

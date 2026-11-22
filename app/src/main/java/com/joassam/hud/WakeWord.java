@@ -34,6 +34,18 @@ final class WakeWord {
     /** 폰 안 인식기(소리 없음)를 쓰는 중인지. 안 되면 구글 인식기로 바꾸고 기억함 */
     private boolean onDevice = false;
     private static boolean onDeviceFailed = false;
+    /** 이 시각까지는 폰 안 인식기를 쉬고 구글 인식기로 (티맵이 앞에 있을 때 오류 5가 계속 나는 경우) */
+    private static long onDeviceRestUntil = 0;
+    private int clientErrs = 0;
+    private long clientErrSince = 0;
+    /** HUD의 마이크 표시용: 마지막으로 듣기가 살아 있던 시각 / 마지막 오류 시각 */
+    static volatile long micAliveAt = 0, micErrAt = 0;
+
+    /** HUD 마이크 표시: 지금 '조아야'를 듣고 있나 */
+    static boolean micListening() {
+        long now = System.currentTimeMillis();
+        return micAliveAt > micErrAt && now - micAliveAt < 35_000L;
+    }
     private boolean onDeviceWorked = false;
     static volatile String status = "";
 
@@ -192,6 +204,12 @@ final class WakeWord {
             AudioManager am = (AudioManager) act.getSystemService(Activity.AUDIO_SERVICE);
             am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
                     mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0);
+            // 구글 인식기의 '띵'은 폰에 따라 시스템 소리로도 나서 같이 막음 (티맵 안내 음성과는 상관없음)
+            try {
+                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM,
+                        mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0);
+            } catch (Exception ignored) {
+            }
             musicMuted = mute;
             act.getSharedPreferences("hud", Activity.MODE_PRIVATE).edit().putBoolean("music_muted", mute).apply();
         } catch (Exception ignored) {
@@ -216,6 +234,7 @@ final class WakeWord {
         try {
             AudioManager am = (AudioManager) c.getSystemService(Activity.AUDIO_SERVICE);
             am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
+            am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0);
         } catch (Exception ignored) {
         }
         p.edit().putBoolean("music_muted", false).apply();
@@ -312,10 +331,16 @@ final class WakeWord {
                 return;
             }
         } else musicWaitSince = 0;
+        // 구글 인식기로 쉬던 시간이 끝나면 다시 폰 안 인식기(띵 소리 없음)로
+        if (sr != null && !onDevice && onDeviceRestUntil > 0 && System.currentTimeMillis() > onDeviceRestUntil) {
+            onDeviceRestUntil = 0;
+            try { sr.destroy(); } catch (Exception ignored) { }
+            sr = null;
+        }
         try {
             if (sr == null) {
                 onDevice = false;
-                if (!onDeviceFailed && android.os.Build.VERSION.SDK_INT >= 33
+                if (!onDeviceFailed && System.currentTimeMillis() > onDeviceRestUntil && android.os.Build.VERSION.SDK_INT >= 33
                         && SpeechRecognizer.isOnDeviceRecognitionAvailable(act)) {
                     try {
                         sr = SpeechRecognizer.createOnDeviceSpeechRecognizer(act);
@@ -360,6 +385,7 @@ final class WakeWord {
 
     private final RecognitionListener listener = new RecognitionListener() {
         @Override public void onReadyForSpeech(Bundle b) {
+            micAliveAt = System.currentTimeMillis();
             h.removeCallbacks(unmuteMusic);
             if (musicMuted) h.postDelayed(unmuteMusic, 1200); // 시작 '띵'이 지나간 뒤 미디어 소리 되살림
         }
@@ -367,7 +393,10 @@ final class WakeWord {
             h.removeCallbacks(quietRestart); // 말하는 중엔 끊지 않음 (대신 최대 10초)
             h.postDelayed(quietRestart, 10_000);
         }
-        @Override public void onRmsChanged(float v) { }
+        @Override public void onRmsChanged(float v) {
+            long n = System.currentTimeMillis();
+            if (n - micAliveAt > 1000) micAliveAt = n;
+        }
         @Override public void onBufferReceived(byte[] b) { }
         @Override public void onEndOfSpeech() {
             h.removeCallbacks(quietRestart);
@@ -383,6 +412,8 @@ final class WakeWord {
         @Override
         public void onResults(Bundle b) {
             alive();
+            micAliveAt = System.currentTimeMillis();
+            clientErrs = 0;
             errors = 0;
             if (onDevice) onDeviceWorked = true;
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
@@ -424,11 +455,33 @@ final class WakeWord {
                 return;
             }
             if (e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                micAliveAt = System.currentTimeMillis();
+                clientErrs = 0;
                 errors = 0;
                 again(200);
                 return;
             }
             errors++;
+            micErrAt = System.currentTimeMillis();
+            // 오류 5(인식기 꼬임)·7·8(바쁨)·11(연결 끊김): 같은 인식기로 다시 해 봐야 계속 실패 → 새로 만듦
+            if (e == 5 || e == 7 || e == 8 || e == 11) {
+                long n = System.currentTimeMillis();
+                if (n - clientErrSince > 30_000L) {
+                    clientErrSince = n;
+                    clientErrs = 0;
+                }
+                clientErrs++;
+                try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
+                sr = null;
+                // 폰 안 인식기가 30초 안에 3번 꼬이면(주로 티맵이 앞에 있을 때) 3분 동안 구글 인식기로
+                if (onDevice && clientErrs >= 3) {
+                    onDeviceRestUntil = n + 3 * 60_000L;
+                    clientErrs = 0;
+                    NavListenerService.log("폰 안 인식기가 계속 꼬임(오류 " + e + ") → 3분 동안 구글 인식기로 듣기 (띵 소리는 음소거)");
+                }
+                again(e == 8 ? 1500 : 600);
+                return;
+            }
             if (e == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                 status = "마이크 권한 없음";
                 stop();

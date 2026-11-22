@@ -47,8 +47,17 @@ public class VoiceService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         try {
             Notification n = noti();
-            if (Build.VERSION.SDK_INT >= 30) startForeground(NOTI_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            else startForeground(NOTI_ID, n);
+            if (Build.VERSION.SDK_INT >= 30) {
+                // 위치도 같이: HUD가 뒤에 있을 때(반반·지도 화면)도 속도·단속 경고가 계속 바뀌게
+                boolean loc = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+                try {
+                    startForeground(NOTI_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                            | (loc ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0));
+                } catch (Exception e1) {
+                    startForeground(NOTI_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+                }
+            } else startForeground(NOTI_ID, n);
         } catch (Exception e) {
             NavListenerService.log("부르는 말 서비스: 마이크 사용 허락 안 됨 → HUD 화면에서만 들음 (" + e.getClass().getSimpleName() + ")");
             stopSelf();

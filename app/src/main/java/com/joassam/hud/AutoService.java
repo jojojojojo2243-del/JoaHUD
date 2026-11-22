@@ -81,22 +81,36 @@ public class AutoService extends Service {
         public void onReceive(Context c, Intent i) {
             if (Intent.ACTION_POWER_CONNECTED.equals(i.getAction())) {
                 lastPowerOn = System.currentTimeMillis();
+                handler.removeCallbacks(confirmOff); // 잠깐 빠졌다 다시 꽂힘
                 // 메인폰 핫스팟이 붙을 시간을 조금 기다렸다가 판단
                 handler.postDelayed(AutoService.this::onPowerOn, 8000);
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(i.getAction())) {
-                // 무선 충전에서 폰이 살짝 밀려 잠깐 끊긴 것일 수 있으니 6초 기다렸다 판단
+                // 사진 찍으려 폰을 들거나 케이블이 살짝 빠진 것일 수 있으니 20초 기다렸다 판단
                 handler.removeCallbacks(confirmOff);
-                handler.postDelayed(confirmOff, 6000);
+                offTries = 0;
+                handler.postDelayed(confirmOff, 20_000);
             }
         }
     };
 
-    private final Runnable confirmOff = () -> {
-        if (isCharging()) {
-            NavListenerService.log("충전이 잠깐 끊겼다 다시 연결됨 → 시동 유지");
-            return;
+    private int offTries = 0;
+
+    private final Runnable confirmOff = new Runnable() {
+        @Override
+        public void run() {
+            if (isCharging()) {
+                NavListenerService.log("충전이 잠깐 끊겼다 다시 연결됨 → 시동 유지");
+                return;
+            }
+            // 차가 아직 움직이고 있으면 시동이 꺼진 게 아님 (케이블만 빠짐) → 1분까지 더 기다림
+            if (HudActivity.movingRecently() && offTries < 6) {
+                if (offTries == 0) NavListenerService.log("충전이 끊겼지만 차가 움직이는 중 → 시동 꺼짐 아님 (케이블 확인)");
+                offTries++;
+                handler.postDelayed(this, 10_000);
+                return;
+            }
+            onPowerOff();
         }
-        onPowerOff();
     };
 
     private void onPowerOn() {
@@ -124,7 +138,7 @@ public class AutoService extends Service {
         if (HudActivity.visible || DestActivity.visible) return;
         Intent i;
         if (DestActivity.hasResume(this)) i = new Intent(this, DestActivity.class).putExtra("resume", true);
-        else if (p.getBoolean("ign_dest", true)) i = new Intent(this, DestActivity.class);
+        else if (p.getBoolean("ign_dest", true) && !simple(this)) i = new Intent(this, DestActivity.class);
         else i = new Intent(this, HudActivity.class);
         startFromBackground(i);
     }
@@ -143,6 +157,16 @@ public class AutoService extends Service {
 
     private void showPark() {
         showPark(0);
+    }
+
+    /**
+     * 단순 모드(기본): 화면을 저절로 바꾸는 기능을 끔. HUD 하나만 떠 있고, 화면은 말할 때만 바뀜.
+     * - 시동 켜면 HUD만 (목적지 안 물음 — "하이 조아, ○○ 가자"로 말하면 됨)
+     * - 내가 말한 목적지로 길안내가 시작될 때만 HUD로 돌아옴 (티맵에서 직접 시작한 안내엔 손 안 댐)
+     * - 티맵을 안 만져도·홈으로 나가도 HUD로 안 넘어감, 도착해도 다음 목적지 안 물음, 화면 자동 정리 안 함
+     */
+    static boolean simple(Context c) {
+        return c.getSharedPreferences("hud", MODE_PRIVATE).getBoolean("simple_mode", true);
     }
 
     /**

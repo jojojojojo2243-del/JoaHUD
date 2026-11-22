@@ -51,6 +51,76 @@ public class HudView extends View {
         fill.setStyle(Paint.Style.FILL);
         text.setTypeface(Typeface.DEFAULT_BOLD);
         setClickable(true);
+        live = this;
+    }
+
+    /** 반반 화면에서 HUD 칸을 그릴 때 쓰는 지금 HUD (속도·색·경고 상태를 그대로 씀) */
+    static volatile HudView live;
+
+    /**
+     * 반반 화면의 HUD 칸: 큰 속도 + 구간단속 표지판(또는 단속카메라·제한속도) + 시계 + 마이크.
+     * 화면 밖(접근성 덮개)에서 부름.
+     */
+    static void drawHalf(Canvas c, float l, float t, float w, float h) {
+        HudView v = live;
+        c.save();
+        c.translate(l, t);
+        c.clipRect(0, 0, w, h);
+        c.drawColor(Color.BLACK);
+        if (v != null) v.drawCompact(c, (int) w, (int) h);
+        c.restore();
+    }
+
+    private void drawCompact(Canvas c, int w, int h) {
+        float pad = Math.min(w, h) * 0.05f;
+        // 시계 (오른쪽 위)
+        text.setTextAlign(Paint.Align.RIGHT);
+        text.setColor(color);
+        text.setTextSize(Math.min(w, h) * 0.09f);
+        c.drawText(clock.format(new Date()), w - pad, pad + text.getTextSize(), text);
+        // 위쪽: 구간단속 표지판, 아니면 단속카메라·제한속도
+        float topH = h * 0.42f;
+        if (Alerts.inSection) {
+            float size = Math.min(topH * 0.85f, w * 0.40f);
+            drawSectionBadge(c, pad, pad * 2.2f + text.getTextSize() * 0.2f, size, w - pad * 2);
+        } else if (alertsOn) {
+            Alerts.Hit a = Alerts.now();
+            if (a != null) {
+                boolean temp = nav == null;
+                int keepLimit = 0, keepDist = 0;
+                if (temp) nav = new NavData();
+                else {
+                    keepLimit = nav.limit;
+                    keepDist = nav.sdiDist;
+                }
+                nav.limit = a.limit;
+                nav.sdiDist = a.dist;
+                float r = Math.min(topH * 0.36f, w * 0.17f);
+                if (a.limit > 0) drawLimit(c, pad + r, pad + topH * 0.5f, r);
+                drawCamera(c, pad + r * 3.4f, pad + topH * 0.5f, r * 1.6f);
+                nav.limit = keepLimit;
+                nav.sdiDist = keepDist;
+                if (temp) nav = null;
+            }
+        }
+        // 아래쪽: 큰 속도
+        int sp = speed < 0 ? 0 : Math.round(speed);
+        String ss = String.valueOf(sp);
+        float size = Math.min(h * 0.46f, w * 0.42f);
+        text.setTextSize(size);
+        while (text.measureText(ss) > w * 0.70f && size > 10) {
+            size *= 0.92f;
+            text.setTextSize(size);
+        }
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setColor(speedColor());
+        float base = h - pad * 1.6f - size * 0.12f;
+        float sw = text.measureText(ss);
+        c.drawText(ss, w * 0.46f, base, text);
+        text.setTextSize(size * 0.20f);
+        text.setTextAlign(Paint.Align.LEFT);
+        c.drawText("km/h", w * 0.46f + sw / 2f + size * 0.05f, base, text);
+        drawMic(c, w, h);
     }
 
     public void setColor(int c) {
@@ -106,6 +176,7 @@ public class HudView extends View {
     protected void onDraw(Canvas c) {
         int w = getWidth(), h = getHeight();
         c.drawColor(Color.BLACK);
+        drawMic(c, w, h);
         boolean landscape = w > h;
         long now = System.currentTimeMillis();
         boolean stale = lastRecv == 0 || now - lastRecv > 6000;
@@ -601,6 +672,26 @@ public class HudView extends View {
         text.setColor(numColor);
         c.drawText(avgS, startX + lw * scale, base, text);
         text.setTextAlign(Paint.Align.CENTER);
+    }
+
+    /** 왼쪽 아래 작은 마이크: 켜져 있으면 '조아야'를 듣는 중, 회색에 빗금이면 듣기가 멈춘 것 */
+    private void drawMic(Canvas c, int w, int h) {
+        boolean on = WakeWord.micListening();
+        float s = Math.min(w, h) * 0.055f;
+        float cx = s * 1.2f, by = h - s * 0.9f;
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(on ? color : Color.rgb(90, 90, 90));
+        p.setAlpha(on ? 210 : 255);
+        c.drawRoundRect(new RectF(cx - s * 0.28f, by - s * 1.35f, cx + s * 0.28f, by - s * 0.55f), s * 0.28f, s * 0.28f, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(s * 0.11f);
+        c.drawArc(new RectF(cx - s * 0.48f, by - s * 1.1f, cx + s * 0.48f, by - s * 0.32f), 0, 180, false, p);
+        c.drawLine(cx, by - s * 0.32f, cx, by - s * 0.08f, p);
+        c.drawLine(cx - s * 0.25f, by - s * 0.08f, cx + s * 0.25f, by - s * 0.08f, p);
+        if (!on) {
+            p.setColor(Color.rgb(200, 60, 50));
+            c.drawLine(cx - s * 0.6f, by - s * 1.4f, cx + s * 0.6f, by, p);
+        }
     }
 
     /** 제한속도 표지판 (빨간 테두리 원) */

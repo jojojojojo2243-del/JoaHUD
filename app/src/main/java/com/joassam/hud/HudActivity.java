@@ -68,6 +68,8 @@ public class HudActivity extends Activity {
     private final LocationListener locListener = new LocationListener() {
         @Override
         public void onLocationChanged(Location loc) {
+            lastKmh = loc.hasSpeed() ? loc.getSpeed() * 3.6f : 0f;
+            lastKmhAt = System.currentTimeMillis();
             hud.setSpeed(loc.hasSpeed() ? loc.getSpeed() * 3.6f : 0f);
             RouteGuide.onLocation(loc);
             try {
@@ -750,6 +752,14 @@ public class HudActivity extends Activity {
         t.start();
     }
 
+    /** 최근 GPS 속도 (시동 꺼짐 판단용: 달리는 중이면 충전이 끊겨도 시동 꺼짐 아님) */
+    static volatile float lastKmh = 0;
+    static volatile long lastKmhAt = 0;
+
+    static boolean movingRecently() {
+        return System.currentTimeMillis() - lastKmhAt < 15_000L && lastKmh > 8f;
+    }
+
     private void startGps() {
         if (Build.VERSION.SDK_INT >= 23
                 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -766,7 +776,7 @@ public class HudActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
-        if (TmapA11yService.mapMode && !TmapA11yService.splitMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도 모드 끝 (반반 화면은 그대로)
+        if (TmapA11yService.mapMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도·반반 모드 끝
         // "조아야" 듣기: 가능하면 HUD 밖(티맵·홈 화면)에서도 듣는 서비스로, 안 되면 HUD 화면에서만
         VoiceService.start(this);
         handler.postDelayed(() -> {
