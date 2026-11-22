@@ -356,7 +356,7 @@ public class HudActivity extends Activity {
     static boolean looksLikeCommand(String said) {
         String s = said.replace(" ", "");
         return colorByName(s) >= 0 || has(s, "뒤집", "가로", "세로", "반전", "밝게", "어둡게", "크게", "작게", "소리", "볼륨",
-                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투", "반반", "분할", "나눠");
+                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투", "반반", "분할", "나눠", "정리", "하이패스", "요금소", "톨게이트");
     }
 
     /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
@@ -424,6 +424,18 @@ public class HudActivity extends Activity {
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             return "HUD를 보여 드릴게요";
         }
+        if (has(s, "정리", "리셋", "초기화", "원래대로", "꼬였")) {
+            TmapA11yService.cleanUp();
+            return "화면 정리할게요";
+        }
+        if (has(s, "하이패스", "요금소", "톨게이트", "차로보여", "차선보여")) {
+            // 요금소 차로(하이패스·현금·카드)는 티맵 지도 화면에만 나와서, 지도를 20초 보여 줌
+            if (VoiceService.running && TmapA11yService.startMapMode()) {
+                TmapA11yService.mapAutoOffAt = System.currentTimeMillis() + 20_000L;
+                return "요금소 차로를 20초 보여 드릴게요";
+            }
+            return "티맵 지도 화면에서 차로를 확인해 주세요";
+        }
         if (has(s, "반반", "반씩", "화면나눠", "나눠서", "분할", "나눠보여", "같이보여", "둘다보여", "반쪽")) {
             if (VoiceService.running && TmapA11yService.startSplitMode())
                 return "반은 티맵, 반은 HUD로 나눠 볼게요. 돌아갈 땐 HUD 보여 라고 하세요";
@@ -466,7 +478,7 @@ public class HudActivity extends Activity {
         }
         if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
             return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 지도 보여, 경로 다시, 목적지 바꿔, "
-                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼, 반반 화면 이에요. "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼, 반반 화면, 하이패스, 정리해 예요. "
                     + "명령 뒤 20초 동안은 부르는 말 없이 바로 말해도 돼요"
                     + (Brain.enabled(this) ? ". 그 밖의 말은 AI가 알아들어요" : "");
         }
@@ -559,7 +571,7 @@ public class HudActivity extends Activity {
             "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
             "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
             "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여",
-            "블루투스켜", "블루투스꺼", "반반화면"};
+            "블루투스켜", "블루투스꺼", "반반화면", "정리해", "하이패스"};
 
     private static String canon(String s) {
         if (s.length() > 8) return s;

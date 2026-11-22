@@ -120,9 +120,11 @@ public class AutoService extends Service {
         offAt = 0;
         NavListenerService.log("🔑 시동 켜짐(충전 시작)");
         updateNoti("🚗 운행 중");
+        driveDnd(true);
         if (HudActivity.visible || DestActivity.visible) return;
         Intent i;
-        if (p.getBoolean("ign_dest", true)) i = new Intent(this, DestActivity.class);
+        if (DestActivity.hasResume(this)) i = new Intent(this, DestActivity.class).putExtra("resume", true);
+        else if (p.getBoolean("ign_dest", true)) i = new Intent(this, DestActivity.class);
         else i = new Intent(this, HudActivity.class);
         startFromBackground(i);
     }
@@ -133,11 +135,58 @@ public class AutoService extends Service {
         offAt = System.currentTimeMillis();
         NavListenerService.log("🔑 시동 꺼짐(충전 끊김)");
         updateNoti("대기 중 — 시동을 기다립니다");
+        // 도착 전에 시동 끔 (휴게소·마트 등) → 다음 시동 때 "아까 가던 곳으로 계속 갈까요?"
+        if (NavListenerService.tmapGuiding()) DestActivity.saveResume(this);
+        driveDnd(false);
         showPark();
     }
 
     private void showPark() {
         showPark(0);
+    }
+
+    /**
+     * 운전 중 알림 막기: 시동 켜지면 방해 금지(중요 알림만), 끄면 원래대로.
+     * 처음 한 번 '방해 금지 권한'을 허용해야 함 (앱 첫 화면 버튼).
+     */
+    void driveDnd(boolean on) {
+        SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
+        if (!p.getBoolean("drive_dnd", true)) return;
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (!nm.isNotificationPolicyAccessGranted() && on && A11yGuard.canAutoEnable(this)) {
+                // PC로 '설정 쓰기' 권한을 줬으면 방해 금지 권한도 앱이 스스로 켬
+                try {
+                    String k = "enabled_notification_policy_access_packages";
+                    String v = android.provider.Settings.Secure.getString(getContentResolver(), k);
+                    if (v == null || !v.contains(getPackageName())) {
+                        android.provider.Settings.Secure.putString(getContentResolver(), k,
+                                (v == null || v.isEmpty()) ? getPackageName() : v + ":" + getPackageName());
+                        NavListenerService.log("방해 금지 권한 스스로 켬");
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!nm.isNotificationPolicyAccessGranted()) {
+                if (on) NavListenerService.log("운전 중 알림 막기: '방해 금지 권한'이 없어서 못 함 (앱 첫 화면에서 허용)");
+                return;
+            }
+            if (on) {
+                int cur = nm.getCurrentInterruptionFilter();
+                if (cur == android.app.NotificationManager.INTERRUPTION_FILTER_ALL) {
+                    p.edit().putBoolean("dnd_by_us", true).apply();
+                    nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY);
+                    NavListenerService.log("운전 중 알림 막기 켬 (방해 금지)");
+                }
+            } else if (p.getBoolean("dnd_by_us", false)) {
+                p.edit().putBoolean("dnd_by_us", false).apply();
+                nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL);
+                NavListenerService.log("운전 끝 → 알림 다시 켬");
+            }
+        } catch (Throwable t) {
+            NavListenerService.log("운전 중 알림 막기 실패: " + t.getMessage());
+        }
     }
 
     /**

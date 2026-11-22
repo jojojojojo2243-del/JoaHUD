@@ -97,6 +97,9 @@ public class TmapA11yService extends AccessibilityService {
             int type = event.getEventType();
             // 티맵을 손으로 만지는 중 (누르기·밀기·글자 입력·창 바뀜)
             if (pk.equals(TMAP) && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) lastTmapTouch = System.currentTimeMillis();
+            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
+                    || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED)
+                lastAnyTouch = System.currentTimeMillis();
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 // 키보드·시스템UI·티맵 미니 안내 같은 작은 창은 '앞 화면'으로 치지 않음
                 if (!pk.equals("com.android.systemui") && !pk.contains("inputmethod") && !pk.contains("honeyboard")) {
@@ -116,7 +119,66 @@ public class TmapA11yService extends AccessibilityService {
     static volatile String fgPkg = "";
 
     // ── 티맵을 만지다가도 HUD로 돌아가기 ──
-    private volatile long lastTmapTouch = 0, tmapFgSince = 0;
+    private volatile long lastTmapTouch = 0, tmapFgSince = 0, lastAnyTouch = 0;
+    private long oddSince = 0;
+    private long notFoundFiredAt = 0;
+
+    /** 음성 "조아야 정리해": 지도 덮개·검은 가림막·목적지 창을 다 치우고 HUD 하나만 */
+    static void cleanUp() {
+        TmapA11yService a = instance;
+        if (a == null) return;
+        a.handler.post(() -> {
+            if (mapMode) a.doStopMap();
+            a.removeOverlay();
+            a.hideCover();
+            DestActivity.closeIfOpen();
+            NavListenerService.log("화면 정리 → HUD만 남김");
+            a.handler.postDelayed(() -> {
+                try {
+                    a.startActivity(new android.content.Intent(a, HudActivity.class)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                } catch (Throwable ignored) {
+                }
+            }, 700);
+        });
+    }
+
+    /**
+     * 운전 중(길안내 중) HUD도 티맵도 아닌 화면이 25초 넘게 아무도 안 만진 채 떠 있으면 → 꼬인 것으로 보고 정리해서 HUD.
+     * 티맵이 "검색 결과 없음"을 띄우면 기다리지 않고 바로 목적지를 다시 물음.
+     */
+    private void checkOddScreen() {
+        long now = System.currentTimeMillis();
+        // ① 목적지 검색 결과 없음
+        if (TMAP.equals(fgPkg) && now - NavListenerService.destFlowAt < 3 * 60_000L && now - notFoundFiredAt > 60_000L
+                && (tmapTextShown("검색 결과가 없") || tmapTextShown("검색결과가 없") || tmapTextShown("결과가 없습니다")
+                || tmapTextShown("찾을 수 없") || tmapTextShown("검색된 결과가"))) {
+            notFoundFiredAt = now;
+            NavListenerService.log("티맵: 목적지 검색 결과 없음 → 바로 다시 물어봄");
+            DestActivity.fireWatchdogNow();
+            return;
+        }
+        // ② 꼬인 화면
+        boolean odd = AutoService.ignOn && !AutoService.parked() && guiding() && !mapMode
+                && !HudActivity.visible && !DestActivity.visible && !MainActivity.visible && !ParkActivity.visible
+                && !TMAP.equals(fgPkg) && now > autoStartUntil && now > selfTmapUntil && AutoService.carState == 0;
+        if (!odd) {
+            oddSince = 0;
+            return;
+        }
+        if (oddSince == 0) oddSince = now;
+        if (now - oddSince < 25_000L || now - lastAnyTouch < 25_000L) return;
+        oddSince = 0;
+        lastAnyTouch = now;
+        hideCover();
+        removeOverlay();
+        NavListenerService.log("HUD도 티맵도 아닌 화면이 계속 떠 있음(" + fgPkg + ") → 정리하고 HUD로");
+        try {
+            startActivity(new android.content.Intent(this, HudActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** 사람이 최근 ms 안에 티맵 화면을 만졌는지 (티맵이 앞에 있을 때) */
     static boolean userTouching(long ms) {
@@ -473,7 +535,7 @@ public class TmapA11yService extends AccessibilityService {
         super.onDestroy();
     }
 
-    private long lastPopupCheck = 0;
+    private long lastPopupCheck = 0, lastOddCheck = 0;
 
     /** 운전 중 티맵에 뜨는 오류·안내 창(인터넷 끊김, 지도 갱신 등)을 앱이 대신 닫음 → 손댈 일 없게 */
     /** 티맵 '업데이트 해주세요' 창 → [닫기] (운전 중 업데이트로 티맵이 꺼지면 안 됨). 눌렀으면 true */
@@ -509,6 +571,8 @@ public class TmapA11yService extends AccessibilityService {
 
     /** 반반 화면: 삼성 분할 화면으로 위는 티맵(뒤집어 덮음), 아래는 HUD */
     static volatile boolean splitMode = false;
+    /** 0이 아니면 이 시각에 지도 모드를 저절로 끄고 HUD로 (요금소 차로 보기) */
+    static volatile long mapAutoOffAt = 0;
     /** 두 번 톡톡 → 이 시각까지 뒤집기를 풀어 실제 티맵을 만질 수 있게 */
     private long peekUntil = 0;
     private android.view.WindowManager.LayoutParams mapLp;
@@ -666,6 +730,7 @@ public class TmapA11yService extends AccessibilityService {
     }
 
     private void doStopMap() {
+        mapAutoOffAt = 0;
         boolean was = mapMode, split = splitMode;
         mapMode = false;
         splitMode = false;
@@ -699,6 +764,15 @@ public class TmapA11yService extends AccessibilityService {
 
     /** 티맵 본 화면(가장 큰 티맵 창)을 찍어서 덮개 그림으로 */
     private void tickMap() {
+        if (mapAutoOffAt > 0 && System.currentTimeMillis() > mapAutoOffAt && peekUntil == 0) {
+            doStopMap();
+            try {
+                startActivity(new android.content.Intent(this, HudActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            } catch (Throwable ignored) {
+            }
+            return;
+        }
         long now = System.currentTimeMillis();
         if (AutoService.parked()) {
             doStopMap();
@@ -809,6 +883,13 @@ public class TmapA11yService extends AccessibilityService {
         checkTmapIdle();
         closeTmapPopups();
         closeSystemPopups();
+        if (System.currentTimeMillis() - lastOddCheck > 2000) {
+            lastOddCheck = System.currentTimeMillis();
+            try {
+                checkOddScreen();
+            } catch (Throwable ignored) {
+            }
+        }
         if (!HudActivity.visible) {
             hideCover();
             return;

@@ -174,6 +174,22 @@ public class DestActivity extends Activity {
         // 손 안 대고: 소리로 "어디로 갈까요?" → 듣기
         nextMode = getIntent() != null && getIntent().getBooleanExtra("next", false);
         String said0 = getIntent() != null ? getIntent().getStringExtra("said") : null;
+        boolean cmd0 = getIntent() != null && getIntent().getBooleanExtra("cmd", false);
+        resumeMode = getIntent() != null && getIntent().getBooleanExtra("resume", false);
+        // 티맵이 이미 길안내 중이면 저절로 뜬 목적지 물음은 하지 않음 (화면이 왔다 갔다 꼬이는 것 막기)
+        if ((said0 == null || said0.trim().isEmpty()) && !cmd0 && NavListenerService.tmapGuiding()) {
+            NavListenerService.log("티맵이 이미 길안내 중 → 목적지 안 묻고 HUD");
+            handler.postDelayed(this::openHudOnly, 300);
+            return;
+        }
+        if (resumeMode) {
+            String rn = p.getString("resume_name", "");
+            if (rn.isEmpty()) resumeMode = false;
+            else {
+                handler.postDelayed(() -> ask("아까 가던 " + ro(rn) + " 계속 갈까요?"), 800);
+                return;
+            }
+        }
         if (said0 != null && !said0.trim().isEmpty()) {
             // "조아야 집" 처럼 부르면서 바로 말한 경우: 묻지 않고 바로 처리
             List<String> l = new ArrayList<>();
@@ -191,6 +207,35 @@ public class DestActivity extends Activity {
     private android.speech.tts.TextToSpeech tts;
     private boolean ttsReady = false;
     private boolean nextMode = false;
+    /** 도착 전에 시동을 껐다 켬 → "아까 가던 곳으로 계속 갈까요?" */
+    private boolean resumeMode = false;
+
+    /** 중간에 시동 끔 → 가던 곳 기억 (도착하면 지움) */
+    static void saveResume(android.content.Context c) {
+        android.content.SharedPreferences sp = c.getSharedPreferences("hud", MODE_PRIVATE);
+        String dest = NavListenerService.lastGuideDest == null ? "" : NavListenerService.lastGuideDest.trim();
+        String rn = sp.getString("last_route_name", "");
+        String url = sp.getString("last_route_url", "");
+        String name = dest.isEmpty() ? rn : dest;
+        if (name.isEmpty()) return;
+        // 티맵에서 직접 고른 목적지면 예전 경로 주소는 안 맞으니 이름으로 다시 찾음
+        boolean same = !rn.isEmpty() && (dest.isEmpty() || dest.replace(" ", "").contains(rn.replace(" ", ""))
+                || rn.replace(" ", "").contains(dest.replace(" ", "")));
+        sp.edit().putString("resume_name", same ? rn : name).putString("resume_url", same ? url : "")
+                .putLong("resume_at", System.currentTimeMillis()).apply();
+        NavListenerService.log("도착 전에 시동 꺼짐 → 가던 곳 '" + (same ? rn : name) + "' 기억");
+    }
+
+    static void clearResume(android.content.Context c) {
+        c.getSharedPreferences("hud", MODE_PRIVATE).edit().remove("resume_at").remove("resume_name").remove("resume_url").apply();
+    }
+
+    /** 시동 켤 때 이어 갈 곳이 있나 (4시간 안) */
+    static boolean hasResume(android.content.Context c) {
+        android.content.SharedPreferences sp = c.getSharedPreferences("hud", MODE_PRIVATE);
+        long at = sp.getLong("resume_at", 0);
+        return at > 0 && System.currentTimeMillis() - at < 4 * 3600_000L && !sp.getString("resume_name", "").isEmpty();
+    }
     private int misses = 0;
     private List<String> choices = null;
     private String prompt = "어디로 갈까요?";
@@ -271,6 +316,30 @@ public class DestActivity extends Activity {
     }
 
     private void heard(List<String> alts) {
+        if (resumeMode && choices == null) {
+            resumeMode = false;
+            String a0 = alts.get(0).replace(" ", "");
+            String rn = p.getString("resume_name", "");
+            String ru = p.getString("resume_url", "");
+            if (a0.length() <= 10 && a0.matches(".*(아니|아뇨|됐어|새로|다른|싫어|말고|안가|노).*")) {
+                clearResume(this);
+                ask("어디로 갈까요?");
+                return;
+            }
+            if (a0.length() <= 10 && a0.matches(".*(네|예|응|^어$|그래|계속|가자|가줘|좋아|오케이|맞아|ㅇㅇ|그렇게).*")) {
+                clearResume(this);
+                NavListenerService.log("가던 곳 '" + rn + "' 이어서 안내");
+                if (!ru.isEmpty()) {
+                    p.edit().putString("last_route_url", ru).putString("last_route_name", rn).apply();
+                    speak(ro(rn) + " 이어서 안내할게요", () -> {
+                        if (reroute(this)) armWatchdog(getApplicationContext(), rn);
+                        finish();
+                    });
+                } else speak(ro(rn) + " 이어서 안내할게요", () -> go(rn));
+                return;
+            }
+            clearResume(this); // 다른 곳 이름을 바로 말함 → 아래에서 목적지로 처리
+        }
         // HUD가 떠 있으면 "뒤집어", "흰색으로", "티맵 꺼" 같은 명령도 여기서 받음
         if (choices == null && HudActivity.command(alts.get(0))) {
             finish();
@@ -350,10 +419,18 @@ public class DestActivity extends Activity {
         }
     }
 
+    private static java.lang.ref.WeakReference<DestActivity> cur;
+
+    static void closeIfOpen() {
+        DestActivity d = cur != null ? cur.get() : null;
+        if (d != null) d.runOnUiThread(d::finish);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         visible = true;
+        cur = new java.lang.ref.WeakReference<>(this);
     }
 
     @Override
@@ -667,6 +744,20 @@ public class DestActivity extends Activity {
      * 이유가 무엇이든) 티맵을 내리고 "어디로 갈까요?"를 다시 물음. 사람이 티맵을 만지는 중이면 더 기다림.
      */
     static void armWatchdog(android.content.Context app, String label) {
+        armWatchdog(app, label, 50_000L);
+    }
+
+    /** 티맵이 "검색 결과 없음"을 띄우면 기다리지 않고 바로 다시 물음 */
+    static void fireWatchdogNow() {
+        Runnable r = wdCheck;
+        if (r == null) return;
+        wd.removeCallbacks(r);
+        wd.post(r);
+    }
+
+    private static Runnable wdCheck = null;
+
+    static void armWatchdog(android.content.Context app, String label, long delay) {
         final long token = ++wdToken;
         final long openedAt = System.currentTimeMillis();
         final int[] waits = {0};
@@ -676,12 +767,14 @@ public class DestActivity extends Activity {
                 if (token != wdToken) return;             // 그사이 다른 목적지를 다시 고름
                 if (AutoService.parked()) return;          // 시동 꺼짐
                 if (NavListenerService.lastGuideSeen > openedAt) return; // 길안내 시작됨 → 정상
+                if (NavListenerService.tmapGuiding()) return;
                 if (DestActivity.visible) return;
                 if (TmapA11yService.userTouching(15_000L) && waits[0]++ < 4) {
                     wd.postDelayed(this, 30_000L);         // 사람이 직접 고르는 중 → 30초 더
                     return;
                 }
-                NavListenerService.log("'" + label + "' 길안내가 시작되지 않음 → 다시 물어봄");
+                wdCheck = null;
+                NavListenerService.log("'" + label + "' 길안내가 시작되지 않음 → 티맵 닫고 다시 물어봄");
                 TmapA11yService.pressHome();
                 wd.postDelayed(() -> {
                     try {
@@ -693,7 +786,9 @@ public class DestActivity extends Activity {
                 }, 800);
             }
         };
-        wd.postDelayed(check, 75_000L);
+        if (wdCheck != null) wd.removeCallbacks(wdCheck);
+        wdCheck = check;
+        wd.postDelayed(check, delay);
     }
 
     private void openTmap(String dest, String label, double[] ll) {
@@ -716,7 +811,7 @@ public class DestActivity extends Activity {
                         .setPackage(TmapA11yService.TMAP)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
-                armWatchdog(getApplicationContext(), label);
+                armWatchdog(getApplicationContext(), label, u.contains("goalx") ? 50_000L : 35_000L);
                 NavListenerService.log("목적지 '" + dest + "' → 티맵 " + (u.contains("goalx") ? "길안내(좌표 " + String.format(Locale.ROOT, "%.4f,%.4f", ll[0], ll[1]) + ")" : "검색(좌표 못 찾음)") + " 실행");
                 finish();
                 return;

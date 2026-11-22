@@ -36,8 +36,10 @@ public final class Alerts {
     static final String FILE = "cameras.csv";
     static final long WEEK = 7L * 24 * 3600 * 1000;
     static final int F_SCHOOL = 1, F_SECTION = 2, F_SEC_START = 4, F_SEC_END = 8;
+    /** 도로 종류: F_KND = 공공데이터에 도로종류가 적혀 있음, F_HWY = 고속도로·자동차전용도로 */
+    static final int F_HWY = 16, F_KND = 32;
     /** 자료 형식 버전: 구간단속 시점/종점을 담기 시작한 2부터. 낮으면 새로 받음 */
-    static final int FORMAT = 2;
+    static final int FORMAT = 3; // 3: 도로 종류(고속도로 여부) 추가 → 새로 받기
 
     // 불러온 카메라 목록
     private static float[] lat = new float[0], lon = new float[0];
@@ -365,6 +367,11 @@ public final class Alerts {
                 else if (d.equals("2") || d.equals("02") || d.contains("종점") || d.contains("끝")) fl |= F_SECTION | F_SEC_END;
             } else if (kl.startsWith("ovrspdregltsctn") || kl.equals("spdstoplen") || k.equals("과속단속구간길이")) {
                 len = num(v);
+            } else if (kl.startsWith("roadknd") || kl.equals("roadkind") || k.equals("도로종류")) {
+                if (!v.isEmpty() && !v.matches("[0-9]+")) {
+                    fl |= F_KND;
+                    if (v.contains("고속") || v.contains("자동차전용") || v.contains("전용도로")) fl |= F_HWY;
+                }
             } else if (kl.equals("itlpc") || k.equals("설치장소")) {
                 if (v.contains("구간")) {
                     fl |= F_SECTION;
@@ -455,6 +462,8 @@ public final class Alerts {
         hasLast = true;
 
         float[] res = new float[2];
+        float kmh = spd * 3.6f;
+        boolean fast = onFastRoad(kmh);
         // 이미 잡은 카메라: 지나칠 때까지 유지
         if (lockIdx >= 0 && lockIdx < count) {
             Location.distanceBetween(la, lo, lat[lockIdx], lon[lockIdx], res);
@@ -462,8 +471,8 @@ public final class Alerts {
             float diff = angle(heading, res[1]);
             // 구간단속 시점: 카메라 바로 앞(60m)에 오면 지나칠 때까지 기다리지 않고 바로 시작
             if (!inSection && d < 60 && (flags[lockIdx] & F_SEC_START) != 0) passed(lockIdx);
-            // 옆 도로 카메라(학교 옆길 등): 가까워질수록 옆으로 벌어지면 경고 취소
-            if (d > 60 && diff < 90 && side(d, diff) > sideLimit(d)) {
+            // 옆 도로 카메라(학교 옆길 등): 가까워질수록 옆으로 벌어지면 경고 취소. 고가 밑 도로 카메라도 취소
+            if ((d > 60 && diff < 90 && side(d, diff) > sideLimit(d)) || otherRoad(lockIdx, kmh, fast)) {
                 lockIdx = -1;
                 current = null;
                 return;
@@ -492,6 +501,7 @@ public final class Alerts {
             float df = angle(heading, res[1]);
             if (df > 25) continue;
             if (side(res[0], df) > sideLimit(res[0])) continue;
+            if (otherRoad(i, kmh, fast)) continue; // 고가 위·아래 다른 길
             if (res[0] < bestD) {
                 bestD = res[0];
                 best = i;
@@ -504,6 +514,32 @@ public final class Alerts {
         } else {
             current = null;
         }
+    }
+
+    /** 빠르게(시속 85 이상) 달린 지 20초 넘으면 고속도로·고가도로 위로 봄 */
+    private static long fastSince = 0, fastUntil = 0;
+
+    private static boolean onFastRoad(float kmh) {
+        long now = System.currentTimeMillis();
+        if (kmh >= 85) {
+            if (fastSince == 0) fastSince = now;
+            if (now - fastSince > 20_000L) fastUntil = now + 90_000L; // 잠깐 막혀도 1분 30초는 유지
+        } else if (kmh < 60) fastSince = 0;
+        return now < fastUntil;
+    }
+
+    /**
+     * 고가도로 위를 달리는데 밑 일반도로 카메라가 잡히는 것 거르기 (GPS는 높이를 모름).
+     * - 시속 85 이상으로 20초 넘게 달리는 중일 때만, 제한 60 이하 카메라에 대해:
+     *   도로 종류가 '고속도로'가 아니면 무시, 도로 종류를 모르면 내 속도가 제한보다 45 넘게 빠를 때 무시
+     */
+    private static boolean otherRoad(int i, float kmh, boolean fast) {
+        if ((flags[i] & F_SECTION) != 0 && inSection) return false;
+        int lim = limit[i];
+        if (lim <= 0) return false;
+        if (!fast || lim > 60) return false; // 천천히 달릴 땐 거르지 않음 (진짜 단속을 놓치면 안 됨)
+        if ((flags[i] & F_KND) != 0) return (flags[i] & F_HWY) == 0;
+        return kmh >= lim + 45;
     }
 
     /** 진행 방향에서 옆으로 벌어진 거리(m) */

@@ -211,10 +211,15 @@ public class NavListenerService extends NotificationListenerService {
         if (!TmapA11yService.TMAP.equals(pkg)) return;
         if (!getSharedPreferences("hud", MODE_PRIVATE).getBoolean("ask_next", true)) return;
         if (now - stoppingTmapAt < 15_000L) return;                 // 시동 끄면서 끈 것
+        if (AutoService.ignOn) DestActivity.clearResume(this);       // 운행 중 안내가 끝남(도착) → 가던 곳 잊기
         if (!(AutoService.ignOn || AutoService.carState != 0)) return; // 운행 중이 아님
         if (started == 0 || now - started < 60_000L) return;          // 너무 짧은 안내(취소 등)
         handler.postDelayed(() -> {
             if (DestActivity.visible) return;
+            if (tmapGuiding()) { // 경로를 다시 짜느라 알림이 잠깐 사라졌던 것 → 안내 계속 중
+                log("티맵 안내 계속 중 → 다음 목적지 안 물음");
+                return;
+            }
             try {
                 startActivity(new android.content.Intent(this, DestActivity.class)
                         .putExtra("next", true)

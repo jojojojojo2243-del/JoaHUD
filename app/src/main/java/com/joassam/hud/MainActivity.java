@@ -439,6 +439,19 @@ public class MainActivity extends Activity {
         wrow.addView(wakeSave, new LinearLayout.LayoutParams(-2, -2));
         advanced.addView(wrow);
         advanced.addView(check("목적지 도착하면 '다음 목적지 있으세요?' 묻기", "ask_next", true));
+        advanced.addView(check("운전 중(시동 켜짐) 다른 알림 막기 (방해 금지)", "drive_dnd", true));
+        android.app.NotificationManager dndNm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        boolean dndOk = dndNm != null && dndNm.isNotificationPolicyAccessGranted();
+        Button dndBtn = button(dndOk ? "운전 중 알림 막기: 권한 있음 ✔" : "운전 중 알림 막기 권한 허용하기 (한 번만)");
+        dndBtn.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS));
+                Toast.makeText(this, "목록에서 '조아 HUD'를 찾아 허용해 주세요", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "설정 화면을 못 열었어요", Toast.LENGTH_SHORT).show();
+            }
+        });
+        advanced.addView(dndBtn);
         Button ssidBtn = button(carSsidLabel());
         ssidBtn.setOnClickListener(v -> {
             String cur = AutoService.currentSsid(this);
