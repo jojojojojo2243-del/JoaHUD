@@ -644,38 +644,54 @@ public class TmapA11yService extends AccessibilityService {
         else splitMode = false;
     }
 
-    /** 반반 화면 그리기: 가로면 왼쪽 지도·오른쪽 HUD, 세로면 위 지도·아래 HUD */
+    /**
+     * 티맵 화면에서 반반 칸에 넣을 부분: 가로 티맵은 왼쪽 안내판~차(가운데쯤)까지 78%, 세로 티맵은
+     * 위 30%~아래 90% (차는 아래쪽 80% 근처, 맨 아래 정보줄은 뺌). 칸에는 비율 유지해서 줄여 넣음.
+     */
+    static Rect splitSrc(int bw, int bh) {
+        if (bw > bh) return new Rect(0, 0, Math.round(bw * 0.78f), bh);
+        return new Rect(0, Math.round(bh * 0.30f), bw, Math.round(bh * 0.90f));
+    }
+
+    static Rect fitCenter(int sw, int sh, Rect box) {
+        float sc = Math.min(box.width() / (float) sw, box.height() / (float) sh);
+        int dw = Math.round(sw * sc), dh = Math.round(sh * sc);
+        int x = box.left + (box.width() - dw) / 2, y = box.top + (box.height() - dh) / 2;
+        return new Rect(x, y, x + dw, y + dh);
+    }
+
+    /**
+     * 반반 화면 그리기. 가로: 앞유리에서 볼 때 HUD 왼쪽·지도 오른쪽 (덮개가 좌우 반전되므로 그리기는 반대로),
+     * 세로: 위 지도·아래 HUD. 지도는 자르지 않고 차와 앞쪽 경로가 들어가는 부분을 칸에 맞게 줄여 넣음.
+     */
     private void drawSplit(android.graphics.Canvas c, int w, int h, android.graphics.drawable.Drawable d) {
         c.drawColor(android.graphics.Color.BLACK);
         boolean land = w > h;
-        Rect mapR = land ? new Rect(0, 0, (int) (w * 0.55f), h) : new Rect(0, 0, w, (int) (h * 0.52f));
-        Rect hudR = land ? new Rect(mapR.right, 0, w, h) : new Rect(0, mapR.bottom, w, h);
+        SharedPreferences sp = getSharedPreferences("hud", MODE_PRIVATE);
+        // 앞유리(좌우 반전)에서 지도가 오른쪽에 오게: 반전 중이면 그림에선 왼쪽에
+        boolean mapLeft = sp.getBoolean("mirror_h", true) != sp.getBoolean("split_swap", false);
+        int mw = (int) (w * 0.55f);
+        Rect mapR = land ? (mapLeft ? new Rect(0, 0, mw, h) : new Rect(w - mw, 0, w, h))
+                : new Rect(0, 0, w, (int) (h * 0.52f));
+        Rect hudR = land ? (mapLeft ? new Rect(mw, 0, w, h) : new Rect(0, 0, w - mw, h))
+                : new Rect(0, mapR.bottom, w, h);
         if (d instanceof android.graphics.drawable.BitmapDrawable) {
             android.graphics.Bitmap b = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
             if (b != null && !b.isRecycled() && b.getWidth() > 0 && b.getHeight() > 0) {
-                // 칸 비율에 맞게 잘라 냄: 내 차(티맵 화면 가운데쯤)가 칸 안에 들어오게,
-                // 가로면 왼쪽(안내판 쪽)을 더 살리고, 세로면 위(안내판)~차 위치까지
-                float ta = mapR.width() / (float) mapR.height();
-                int bw = b.getWidth(), bh = b.getHeight();
-                Rect src;
-                if (bw / (float) bh > ta) {
-                    int cw = Math.round(bh * ta);
-                    int left = Math.max(0, Math.min(bw - cw, Math.round(bw * 0.5f - cw * 0.9f)));
-                    src = new Rect(left, 0, left + cw, bh);
-                } else {
-                    int ch = Math.round(bw / ta);
-                    int top = Math.max(0, Math.min(bh - ch, Math.round(bh * 0.68f - ch * 0.85f)));
-                    src = new Rect(0, top, bw, top + ch);
-                }
+                Rect src = splitSrc(b.getWidth(), b.getHeight());
+                Rect dst = fitCenter(src.width(), src.height(), mapR);
                 android.graphics.Paint pf = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
-                c.drawBitmap(b, src, mapR, pf);
+                c.drawBitmap(b, src, dst, pf);
             }
         }
         HudView.drawHalf(c, hudR.left, hudR.top, hudR.width(), hudR.height());
         // 가운데 구분선
         android.graphics.Paint ln = new android.graphics.Paint();
         ln.setColor(android.graphics.Color.rgb(60, 60, 60));
-        if (land) c.drawRect(mapR.right - 2, 0, mapR.right + 2, h, ln);
+        if (land) {
+            int x = mapLeft ? mapR.right : mapR.left;
+            c.drawRect(x - 2, 0, x + 2, h, ln);
+        }
         else c.drawRect(0, mapR.bottom - 2, w, mapR.bottom + 2, ln);
     }
 

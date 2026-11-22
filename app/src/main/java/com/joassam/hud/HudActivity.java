@@ -438,6 +438,11 @@ public class HudActivity extends Activity {
             }
             return "티맵 지도 화면에서 차로를 확인해 주세요";
         }
+        if (TmapA11yService.splitMode && has(s, "좌우바꿔", "자리바꿔", "위치바꿔", "반대로")) {
+            SharedPreferences sp = getSharedPreferences("hud", MODE_PRIVATE);
+            sp.edit().putBoolean("split_swap", !sp.getBoolean("split_swap", false)).apply();
+            return "지도와 HUD 자리를 바꿨어요";
+        }
         if (has(s, "반반", "반씩", "화면나눠", "나눠서", "분할", "나눠보여", "같이보여", "둘다보여", "반쪽")) {
             if (VoiceService.running && TmapA11yService.startSplitMode())
                 return "반은 티맵, 반은 HUD로 나눠 볼게요. 돌아갈 땐 HUD 보여 라고 하세요";

@@ -34,6 +34,107 @@ final class WakeWord {
     /** 폰 안 인식기(소리 없음)를 쓰는 중인지. 안 되면 구글 인식기로 바꾸고 기억함 */
     private boolean onDevice = false;
     private static boolean onDeviceFailed = false;
+
+    // ───── 티맵이 앞에 있을 때: 우리 앱이 직접 마이크를 열어 인식기에 소리를 넘겨줌 ─────
+    // (티맵이 앞에 나오면 인식기가 스스로 마이크를 못 잡아 오류 5·무응답이 남.
+    //  접근성 서비스가 있는 우리 앱이 녹음해서 파이프로 넘기면 인식기는 마이크를 안 열어도 됨)
+    private android.media.AudioRecord rec;
+    private volatile boolean recOn = false;
+    private android.os.ParcelFileDescriptor recRead, recWrite;
+    private static boolean extFailed = false, extLogged = false;
+    private int extQuickErrs = 0;
+    private long extStartAt = 0;
+    private volatile int recPeak = 0;
+    private long silentSince = 0, lastSilentLog = 0;
+    private boolean usingExt = false;
+
+    private boolean wantExt() {
+        if (extFailed || android.os.Build.VERSION.SDK_INT < 33) return false;
+        if (!act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ext_mic", true)) return false;
+        return !HudActivity.visible || TmapA11yService.mapMode; // HUD가 안 보일 때(티맵·지도·반반)
+    }
+
+    /** 녹음 시작 → 인식기에 넘길 읽는 쪽 파이프. 실패하면 null */
+    private android.os.ParcelFileDescriptor startExt() {
+        stopExt();
+        try {
+            int rate = 16000;
+            int min = android.media.AudioRecord.getMinBufferSize(rate, android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT);
+            rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION, rate,
+                    android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 3200) * 2);
+            if (rec.getState() != android.media.AudioRecord.STATE_INITIALIZED) {
+                rec.release();
+                rec = null;
+                return null;
+            }
+            android.os.ParcelFileDescriptor[] pp = android.os.ParcelFileDescriptor.createPipe();
+            recRead = pp[0];
+            recWrite = pp[1];
+            final android.media.AudioRecord r = rec;
+            final java.io.OutputStream out = new android.os.ParcelFileDescriptor.AutoCloseOutputStream(recWrite);
+            r.startRecording();
+            recOn = true;
+            new Thread(() -> {
+                byte[] buf = new byte[3200];
+                long winStart = System.currentTimeMillis();
+                int peak = 0;
+                try {
+                    while (recOn) {
+                        int n = r.read(buf, 0, buf.length);
+                        if (n <= 0) break;
+                        for (int k = 0; k + 1 < n; k += 2) {
+                            int v = Math.abs((short) ((buf[k] & 0xff) | (buf[k + 1] << 8)));
+                            if (v > peak) peak = v;
+                        }
+                        out.write(buf, 0, n);
+                        long now = System.currentTimeMillis();
+                        if (now - winStart > 1000) {
+                            recPeak = peak;
+                            if (peak > 0) micAliveAt = now;
+                            checkSilence(peak, now);
+                            peak = 0;
+                            winStart = now;
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    try { out.close(); } catch (Exception ignored) { }
+                }
+            }, "joa-mic").start();
+            return recRead;
+        } catch (Throwable t) {
+            NavListenerService.log("직접 마이크 열기 실패: " + t.getMessage());
+            stopExt();
+            return null;
+        }
+    }
+
+    /** 소리가 계속 0이면 다른 앱이 마이크를 쥐고 있는 것 → 기록에 알림 (2분에 한 번) */
+    private void checkSilence(int peak, long now) {
+        if (peak > 30) {
+            silentSince = 0;
+            return;
+        }
+        if (silentSince == 0) silentSince = now;
+        if (now - silentSince > 8000 && now - lastSilentLog > 120_000L) {
+            lastSilentLog = now;
+            NavListenerService.log("마이크에 소리가 전혀 안 들어옴 → 다른 앱(티맵 음성 호출 '아리아' 등)이 마이크를 쓰는 중. 티맵 설정에서 음성 호출을 꺼 주세요");
+        }
+    }
+
+    private void stopExt() {
+        recOn = false;
+        android.media.AudioRecord r = rec;
+        rec = null;
+        if (r != null) {
+            try { r.stop(); } catch (Exception ignored) { }
+            try { r.release(); } catch (Exception ignored) { }
+        }
+        try { if (recRead != null) recRead.close(); } catch (Exception ignored) { }
+        recRead = null;
+        recWrite = null;
+    }
     /** 이 시각까지는 폰 안 인식기를 쉬고 구글 인식기로 (티맵이 앞에 있을 때 오류 5가 계속 나는 경우) */
     private static long onDeviceRestUntil = 0;
     private int clientErrs = 0;
@@ -82,6 +183,7 @@ final class WakeWord {
 
     void stop() {
         on = false;
+        stopExt();
         stallH.removeCallbacks(stallCheck);
         try {
             if (tts != null) tts.shutdown();
@@ -363,7 +465,23 @@ final class WakeWord {
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true) // 폰 안에서 처리(데이터·열 절약), 안 되면 자동으로 온라인
                     .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L);
-            if (!onDevice) musicMute(true);
+            usingExt = false;
+            if (wantExt()) {
+                android.os.ParcelFileDescriptor src = startExt();
+                if (src != null) {
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src)
+                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000);
+                    usingExt = true;
+                    extStartAt = System.currentTimeMillis();
+                    if (!extLogged) {
+                        extLogged = true;
+                        NavListenerService.log("HUD 밖(티맵·지도·반반)에선 앱이 직접 마이크를 열어 '조아야'를 들음");
+                    }
+                }
+            } else stopExt();
+            if (!onDevice && !usingExt) musicMute(true);
             sr.cancel();
             sr.startListening(i);
             h.removeCallbacks(quietRestart);
@@ -412,6 +530,7 @@ final class WakeWord {
         @Override
         public void onResults(Bundle b) {
             alive();
+            if (usingExt) extQuickErrs = 0;
             micAliveAt = System.currentTimeMillis();
             clientErrs = 0;
             errors = 0;
@@ -431,6 +550,15 @@ final class WakeWord {
         @Override
         public void onError(int e) {
             alive();
+            // 인식기가 '직접 넘긴 소리'를 못 받는 폰이면 곧바로 오류 → 두 번이면 이 방식 끄기
+            if (usingExt && e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    && System.currentTimeMillis() - extStartAt < 1500) {
+                if (++extQuickErrs >= 2) {
+                    extFailed = true;
+                    stopExt();
+                    NavListenerService.log("이 폰 인식기는 앱이 넘긴 소리를 못 받음 (오류 " + e + ") → 예전 방식으로 듣기");
+                }
+            }
             long nowE = System.currentTimeMillis();
             if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && nowE - lastErrLog > 60_000L) {
                 lastErrLog = nowE;
