@@ -709,31 +709,38 @@ final class WakeWord implements VoskEar.Listener {
     // ───── 계속 듣는 귀에서 온 말 ─────
 
     @Override
-    public void onHeard(String text) {
+    public void onHeard(String g, float conf, String free) {
         if (!on || !usingVosk) return;
         alive();
-        micAliveAt = System.currentTimeMillis();
         long now = System.currentTimeMillis();
+        micAliveAt = now;
         String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
-        boolean called = strongWake(text, w) && after(text.replace(" ", ""), w) != null;
-        // "좋아" 한 마디(옆 사람·라디오)로는 반응 안 함: "하이 조아"처럼 두 마디가 다 들려야 부르는 말
-        if (!called && now >= followUntil) {
-            String n = text.replace(" ", "");
-            if (n.contains("조아") || n.contains("좋아")) NavListenerService.log("부르는 말 아님(한 마디만): \"" + text + "\"");
-            else if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
+        boolean follow = now < followUntil;
+        // 정해진 말 목록에서 고른 것: 확신도가 낮으면 아무 소리를 억지로 맞춘 것이라 버림
+        boolean gOk = !g.isEmpty() && conf >= 0.55f;
+        boolean gWake = gOk && strongWake(g, w) && after(g, w) != null;
+        // 티맵 안내 음성("잠시 후 우회전입니다")은 명령이 아님
+        if (!gWake && isNavVoice(free)) return;
+        // 앱이 말하는 중·직후에 들린 건 자기 목소리 (부르는 말이 확실하면 끼어들기)
+        if (!gWake && (now < ttsUntil + 800 || isEcho(free) || isEcho(g))) return;
+        String use;
+        if (gWake) use = g;                                      // "하이조아블루투스켜"
+        else if (follow && gOk) use = g;                         // 부른 뒤 명령만 ("블루투스켜")
+        else if (follow && !free.isEmpty()) use = free;          // 부른 뒤 자유 대화·목적지
+        else if (strongWake(free, w) && after(free.replace(" ", ""), w) != null) use = free;
+        else {
+            if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
                 lastIgnoredLog = now;
-                NavListenerService.log("들렸지만 부르는 말 없음: \"" + text + "\"");
+                NavListenerService.log("들렸지만 부르는 말 없음: 고른 말 \"" + g + "\"(" + Math.round(conf * 100)
+                        + "%) / 받아쓰기 \"" + free + "\"");
             }
             return;
         }
-        // 앱이 말하는 중·직후에 들린 건 자기 목소리 (부르는 말이 들어 있으면 끼어들기로 봄)
-        if (!called && (now < ttsUntil + 800 || isEcho(text))) return;
-        // 따라 듣는 중에 들린 티맵 안내 음성 ("잠시 후 우회전입니다")은 명령이 아님
-        if (!called && now < followUntil && isNavVoice(text)) return;
-        NavListenerService.log("들음: \"" + text + "\"");
+        NavListenerService.log("들음: \"" + use + "\"" + (use.equals(g) ? " (확신 " + Math.round(conf * 100) + "%)" : "")
+                + (!free.isEmpty() && !use.equals(free) ? " / 받아쓰기 \"" + free + "\"" : ""));
         heardByVosk = true;
         java.util.ArrayList<String> l = new java.util.ArrayList<>();
-        l.add(text);
+        l.add(use);
         check(l);
         heardByVosk = false;
     }

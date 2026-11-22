@@ -32,8 +32,13 @@ import java.util.zip.ZipInputStream;
 final class VoskEar {
 
     interface Listener {
-        /** 말 한 마디가 끝남 (글자) */
-        void onHeard(String text);
+        /**
+         * 말 한 마디가 끝남.
+         * @param picked 정해진 말 목록(부르는 말·명령)에서 고른 것 (띄어쓰기 없음, 없으면 "")
+         * @param conf   고른 말의 확신도 0~1 (낮으면 비슷한 말을 억지로 고른 것)
+         * @param free   받아쓰기 글자 (대화·목적지용, 정확도 낮음)
+         */
+        void onHeard(String picked, float conf, String free);
 
         /** 말하는 중간 글자 (부르는 말을 빨리 잡거나 앱 말을 끊을 때) */
         void onPartial(String text);
@@ -181,6 +186,121 @@ final class VoskEar {
         }
     }
 
+    // ───────── 정해진 말 목록 (부르는 말 + 명령) ─────────
+    // 받아쓰기는 "하이 조아"를 "아바이 주 와 유희"처럼 엉뚱하게 적어서, 정해진 말 중에서 고르게 함 → 훨씬 정확
+
+    static final String[] WAKES = {"하이 조아", "하이 좋아", "아이 좋아", "조아야", "좋아야"};
+    static final String[] COMMANDS = {
+            "헤드업 보여", "헤드업 켜", "허드 보여", "티맵 보여", "티맵 켜", "티맵 꺼", "지도 보여", "반반", "반반 화면",
+            "정리해", "밝게", "더 밝게", "어둡게", "소리 크게", "소리 작게", "볼륨 올려", "볼륨 내려",
+            "초록색", "흰색", "하늘색", "노란색", "주황색", "색 바꿔", "몇 시야", "지금 속도", "구간 평균", "구간 끝",
+            "경고 꺼", "경고 켜", "안내 종료", "경로 다시", "다시 시작", "목적지 바꿔", "블루투스 켜", "블루투스 꺼",
+            "하이패스", "요금소", "도움말", "뒤집어", "돌려", "가로로", "세로로", "좌우 반전", "상하 반전",
+            "자리 바꿔", "주차 번호", "응", "아니", "네", "아니요", "그래"};
+
+    private static String grammarJson;
+
+    /** 모델 낱말장(words.txt)으로 각 말을 모델이 아는 조각들로 나눔. 못 나누는 말은 뺌 */
+    static String buildGrammar(java.util.Set<String> vocab, java.util.List<String> dropped) {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        java.util.LinkedHashSet<String> phrases = new java.util.LinkedHashSet<>();
+        for (String w : WAKES) {
+            phrases.add(w);
+            for (String c : COMMANDS) phrases.add(w + " " + c);
+        }
+        java.util.Collections.addAll(phrases, COMMANDS);
+        for (String ph : phrases) {
+            String seg = vocab == null ? ph : segment(ph, vocab);
+            if (seg == null) {
+                if (dropped != null) dropped.add(ph);
+                continue;
+            }
+            arr.put(seg);
+        }
+        arr.put("[unk]");
+        return arr.toString();
+    }
+
+    /** "블루투스 켜" → "블루투스 켜" 또는 "블루 투스 켜" (모델이 아는 조각으로). 안 되면 null */
+    static String segment(String phrase, java.util.Set<String> vocab) {
+        StringBuilder out = new StringBuilder();
+        for (String chunk : phrase.split(" ")) {
+            if (chunk.isEmpty()) continue;
+            int n = chunk.length();
+            int[] best = new int[n + 1];
+            int[] prev = new int[n + 1];
+            java.util.Arrays.fill(best, Integer.MAX_VALUE);
+            best[0] = 0;
+            for (int i = 0; i < n; i++) {
+                if (best[i] == Integer.MAX_VALUE) continue;
+                for (int j = i + 1; j <= Math.min(n, i + 12); j++) {
+                    if (vocab.contains(chunk.substring(i, j)) && best[i] + 1 < best[j]) {
+                        best[j] = best[i] + 1;
+                        prev[j] = i;
+                    }
+                }
+            }
+            if (best[n] == Integer.MAX_VALUE) return null;
+            java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+            for (int j = n; j > 0; j = prev[j]) parts.add(0, chunk.substring(prev[j], j));
+            for (String p : parts) {
+                if (out.length() > 0) out.append(' ');
+                out.append(p);
+            }
+        }
+        return out.length() == 0 ? null : out.toString();
+    }
+
+    private static java.util.Set<String> loadVocab(File modelDir) {
+        for (String rel : new String[]{"graph/words.txt", "words.txt"}) {
+            File f = new File(modelDir, rel);
+            if (!f.exists()) continue;
+            java.util.HashSet<String> v = new java.util.HashSet<>();
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    int sp = line.indexOf(' ');
+                    v.add(sp > 0 ? line.substring(0, sp) : line.trim());
+                }
+                return v;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static String grammar(Context c) {
+        if (grammarJson != null) return grammarJson;
+        java.util.Set<String> vocab = loadVocab(modelDir(c));
+        java.util.ArrayList<String> dropped = new java.util.ArrayList<>();
+        grammarJson = buildGrammar(vocab, dropped);
+        int n = 0;
+        try {
+            n = new org.json.JSONArray(grammarJson).length() - 1;
+        } catch (Throwable ignored) {
+        }
+        NavListenerService.log("정해진 말 " + n + "개로 듣기 준비" + (vocab == null ? " (낱말장 없음)" : "")
+                + (dropped.isEmpty() ? "" : " — 모델이 모르는 말: " + String.join(", ", dropped.subList(0, Math.min(8, dropped.size())))));
+        return grammarJson;
+    }
+
+    /** 고른 말 결과 JSON → (띄어쓰기 없는 글자, 가장 낮은 확신도) */
+    private static Object[] picked(String json) {
+        try {
+            JSONObject o = new JSONObject(json);
+            String t = o.optString("text", "").trim();
+            if (t.isEmpty() || t.contains("[unk]")) return new Object[]{"", 0f};
+            float minConf = 1f;
+            org.json.JSONArray r = o.optJSONArray("result");
+            if (r != null) for (int i = 0; i < r.length(); i++)
+                minConf = Math.min(minConf, (float) r.getJSONObject(i).optDouble("conf", 1.0));
+            return new Object[]{t.replace(" ", ""), minConf};
+        } catch (Throwable e) {
+            return new Object[]{"", 0f};
+        }
+    }
+
     // ───────── 듣기 ─────────
 
     /** 지금 계속 듣는 중인 귀를 이 리스너로 (하나만 돌림) */
@@ -227,9 +347,16 @@ final class VoskEar {
             return;
         }
         AudioRecord rec = null;
-        org.vosk.Recognizer rz = null;
+        org.vosk.Recognizer rz = null, rg = null;
         try {
             rz = new org.vosk.Recognizer((org.vosk.Model) mdl, (float) RATE);
+            try {
+                rg = new org.vosk.Recognizer((org.vosk.Model) mdl, (float) RATE, grammar(c));
+                rg.setWords(true); // 낱말마다 확신도
+            } catch (Throwable t) {
+                rg = null;
+                NavListenerService.log("정해진 말 듣기를 못 켬 (" + t.getMessage() + ") → 받아쓰기로만");
+            }
             int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 6400) * 2);
@@ -252,6 +379,9 @@ final class VoskEar {
                     if (gate) {
                         gate = false;
                         rz.reset();
+                        if (rg != null) rg.reset();
+                        gBuf.setLength(0);
+                        fBuf.setLength(0);
                     }
                     Thread.sleep(300);
                     rec.read(buf, 0, buf.length); // 버퍼 비우기
@@ -292,13 +422,17 @@ final class VoskEar {
                     quietSince = 0;
                     for (int k = 0; k < ring.length; k++) { // 앞 0.5초부터 넣기
                         byte[] b = ring[(ringPos + k) % ring.length];
-                        if (b != null) rz.acceptWaveForm(b, b.length);
+                        if (b != null) {
+                            if (rz.acceptWaveForm(b, b.length)) add(fBuf, text(rz.getResult(), "text"));
+                            if (rg != null && rg.acceptWaveForm(b, b.length)) addPick(rg.getResult());
+                        }
                         ring[(ringPos + k) % ring.length] = null;
                     }
                 }
+                if (rg != null && rg.acceptWaveForm(buf, n)) addPick(rg.getResult());
                 boolean done = rz.acceptWaveForm(buf, n);
                 if (done) {
-                    deliver(text(rz.getResult(), "text"));
+                    add(fBuf, text(rz.getResult(), "text"));
                     lastPartial = "";
                 } else {
                     String p = text(rz.getPartialResult(), "partial");
@@ -315,7 +449,12 @@ final class VoskEar {
                 else if (quietSince == 0) quietSince = now;
                 // 1.5초 조용하면 문을 닫고 마무리 (Vosk는 쉬게 해서 열 줄이기)
                 if (quietSince > 0 && now - quietSince > 1500) {
-                    deliver(text(rz.getFinalResult(), "text"));
+                    add(fBuf, text(rz.getFinalResult(), "text"));
+                    if (rg != null) addPick(rg.getFinalResult());
+                    deliver(gBuf.toString(), gConf, fBuf.toString());
+                    gBuf.setLength(0);
+                    fBuf.setLength(0);
+                    gConf = 1f;
                     lastPartial = "";
                     gate = false;
                 }
@@ -331,6 +470,9 @@ final class VoskEar {
             if (rz != null) {
                 try { rz.close(); } catch (Throwable ignored) { }
             }
+            if (rg != null) {
+                try { rg.close(); } catch (Throwable ignored) { }
+            }
             synchronized (VoskEar.class) {
                 if (running == this) running = null;
             }
@@ -343,13 +485,33 @@ final class VoskEar {
         }
     }
 
-    private void deliver(String t) {
-        if (t == null || t.trim().isEmpty()) return;
+    // 문이 열려 있는 동안 모은 결과 (한 번 말한 것 전체)
+    private final StringBuilder gBuf = new StringBuilder(), fBuf = new StringBuilder();
+    private float gConf = 1f;
+
+    private static void add(StringBuilder b, String t) {
+        if (t == null || t.isEmpty()) return;
+        if (b.length() > 0) b.append(' ');
+        b.append(t);
+    }
+
+    private void addPick(String json) {
+        Object[] p = picked(json);
+        String t = (String) p[0];
+        if (t.isEmpty()) return;
+        gBuf.append(t);
+        gConf = Math.min(gConf, (Float) p[1]);
+    }
+
+    private void deliver(String picked, float conf, String free) {
+        final String g = picked == null ? "" : picked.trim();
+        final String f = free == null ? "" : free.trim();
+        if (g.isEmpty() && f.isEmpty()) return;
         statHeard++;
-        final String s = t.trim();
+        final float cf = g.isEmpty() ? 0f : conf;
         main.post(() -> {
             Listener l = listener;
-            if (l != null) l.onHeard(s);
+            if (l != null) l.onHeard(g, cf, f);
         });
     }
 
