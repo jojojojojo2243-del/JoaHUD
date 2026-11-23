@@ -441,7 +441,9 @@ final class WakeWord implements VoskEar.Listener {
             return;
         }
         // ── 계속 듣는 귀 (모델이 있으면): 끊기는 틈 없이 듣고, 티맵이 앞에 있어도 들음 ──
-        if (VoskEar.usable(act)) {
+        // HUD 화면이 보일 땐 잘 되던 구글 인식기, 티맵·지도·반반 화면일 땐(구글이 오류 5로 멈춤) 폰 안 작은 모델
+        boolean needEar = !HudActivity.visible || TmapA11yService.mapMode;
+        if (needEar && VoskEar.usable(act)) {
             if (!usingVosk) {
                 usingVosk = true;
                 if (sr != null) {
@@ -454,12 +456,14 @@ final class WakeWord implements VoskEar.Listener {
             }
             VoskEar.start(act, this);
             status = "'" + word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)) + "' 계속 듣는 중";
-            h.postDelayed(this::listen, 10_000); // 10초마다 온도·상태만 확인
+            h.postDelayed(this::listen, 2_000); // 2초마다 확인 (HUD 화면으로 돌아오면 바로 구글 인식기로)
             return;
         }
-        if (usingVosk) {
+        if (usingVosk) { // 계속 듣는 귀 끄고 마이크를 놓아준 뒤 구글 인식기로
             usingVosk = false;
             VoskEar.stopAll();
+            h.postDelayed(this::listen, 400);
+            return;
         }
         if (tmapTalking()) { // 티맵 안내 음성 중엔 '띵'이 겹치지 않게 끝날 때까지 기다림
             long now = System.currentTimeMillis();
@@ -709,40 +713,49 @@ final class WakeWord implements VoskEar.Listener {
     // ───── 계속 듣는 귀에서 온 말 ─────
 
     @Override
-    public void onHeard(String g, float conf, String free) {
+    public void onHeard(java.util.List<String> picks, java.util.List<Float> confs, String free) {
         if (!on || !usingVosk) return;
         alive();
         long now = System.currentTimeMillis();
         micAliveAt = now;
         String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
-        boolean follow = now < followUntil;
-        // 정해진 말 목록에서 고른 것: 확신도가 낮으면 아무 소리를 억지로 맞춘 것이라 버림
-        boolean gOk = !g.isEmpty() && conf >= 0.55f;
-        boolean gWake = gOk && strongWake(g, w) && after(g, w) != null;
-        // 티맵 안내 음성("잠시 후 우회전입니다")은 명령이 아님
-        if (!gWake && isNavVoice(free)) return;
-        // 앱이 말하는 중·직후에 들린 건 자기 목소리 (부르는 말이 확실하면 끼어들기)
-        if (!gWake && (now < ttsUntil + 800 || isEcho(free) || isEcho(g))) return;
-        String use;
-        if (gWake) use = g;                                      // "하이조아블루투스켜"
-        else if (follow && gOk) use = g;                         // 부른 뒤 명령만 ("블루투스켜")
-        else if (follow && !free.isEmpty()) use = free;          // 부른 뒤 자유 대화·목적지
-        else if (strongWake(free, w) && after(free.replace(" ", ""), w) != null) use = free;
-        else {
-            if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
-                lastIgnoredLog = now;
-                NavListenerService.log("들렸지만 부르는 말 없음: 고른 말 \"" + g + "\"(" + Math.round(conf * 100)
-                        + "%) / 받아쓰기 \"" + free + "\"");
-            }
+        boolean any = false;
+        // 고른 말 조각을 하나씩 순서대로: "하이 조아" 조각 → 부르기, 그 뒤 조각 → 명령
+        for (int k = 0; k < picks.size(); k++) {
+            String g = picks.get(k);
+            float conf = confs.get(k);
+            boolean follow = System.currentTimeMillis() < followUntil;
+            boolean wake = conf >= 0.70f && strongWake(g, w) && after(g, w) != null;
+            boolean cmd = follow && conf >= 0.60f && !strongWake(g, w);
+            if (!wake && !cmd) continue;
+            if (!wake && (System.currentTimeMillis() < ttsUntil + 800 || isEcho(g))) continue; // 자기 목소리
+            if (!wake && isNavVoice(free)) continue;                                           // 티맵 안내 음성
+            NavListenerService.log("들음: \"" + g + "\" (확신 " + Math.round(conf * 100) + "%)");
+            any = true;
+            heardByVosk = true;
+            java.util.ArrayList<String> l = new java.util.ArrayList<>();
+            l.add(g);
+            check(l);
+            heardByVosk = false;
+        }
+        if (any) return;
+        // 부른 뒤 목록에 없는 말(자유 대화·장소) → 받아쓰기로
+        if (now < followUntil && !free.isEmpty() && !isNavVoice(free) && now >= ttsUntil + 800 && !isEcho(free)) {
+            NavListenerService.log("들음(받아쓰기): \"" + free + "\"");
+            heardByVosk = true;
+            java.util.ArrayList<String> l = new java.util.ArrayList<>();
+            l.add(free);
+            check(l);
+            heardByVosk = false;
             return;
         }
-        NavListenerService.log("들음: \"" + use + "\"" + (use.equals(g) ? " (확신 " + Math.round(conf * 100) + "%)" : "")
-                + (!free.isEmpty() && !use.equals(free) ? " / 받아쓰기 \"" + free + "\"" : ""));
-        heardByVosk = true;
-        java.util.ArrayList<String> l = new java.util.ArrayList<>();
-        l.add(use);
-        check(l);
-        heardByVosk = false;
+        if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
+            lastIgnoredLog = now;
+            StringBuilder b = new StringBuilder();
+            for (int k = 0; k < picks.size(); k++)
+                b.append(k > 0 ? ", " : "").append(picks.get(k)).append('(').append(Math.round(confs.get(k) * 100)).append("%)");
+            NavListenerService.log("들렸지만 부르는 말 없음: 고른 말 [" + b + "] / 받아쓰기 \"" + free + "\"");
+        }
     }
 
     @Override

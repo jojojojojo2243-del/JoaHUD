@@ -38,7 +38,7 @@ final class VoskEar {
          * @param conf   고른 말의 확신도 0~1 (낮으면 비슷한 말을 억지로 고른 것)
          * @param free   받아쓰기 글자 (대화·목적지용, 정확도 낮음)
          */
-        void onHeard(String picked, float conf, String free);
+        void onHeard(java.util.List<String> picks, java.util.List<Float> confs, String free);
 
         /** 말하는 중간 글자 (부르는 말을 빨리 잡거나 앱 말을 끊을 때) */
         void onPartial(String text);
@@ -380,7 +380,8 @@ final class VoskEar {
                         gate = false;
                         rz.reset();
                         if (rg != null) rg.reset();
-                        gBuf.setLength(0);
+                        gList.clear();
+                        gConfs.clear();
                         fBuf.setLength(0);
                     }
                     Thread.sleep(300);
@@ -451,10 +452,10 @@ final class VoskEar {
                 if (quietSince > 0 && now - quietSince > 1500) {
                     add(fBuf, text(rz.getFinalResult(), "text"));
                     if (rg != null) addPick(rg.getFinalResult());
-                    deliver(gBuf.toString(), gConf, fBuf.toString());
-                    gBuf.setLength(0);
+                    deliver(gList, gConfs, fBuf.toString());
+                    gList.clear();
+                    gConfs.clear();
                     fBuf.setLength(0);
-                    gConf = 1f;
                     lastPartial = "";
                     gate = false;
                 }
@@ -486,8 +487,10 @@ final class VoskEar {
     }
 
     // 문이 열려 있는 동안 모은 결과 (한 번 말한 것 전체)
-    private final StringBuilder gBuf = new StringBuilder(), fBuf = new StringBuilder();
-    private float gConf = 1f;
+    // 고른 말은 조각마다 따로 (이어 붙이면 "하이 조아"가 가운데 묻혀 못 알아봄 — v61 실수)
+    private final java.util.ArrayList<String> gList = new java.util.ArrayList<>();
+    private final java.util.ArrayList<Float> gConfs = new java.util.ArrayList<>();
+    private final StringBuilder fBuf = new StringBuilder();
 
     private static void add(StringBuilder b, String t) {
         if (t == null || t.isEmpty()) return;
@@ -499,19 +502,19 @@ final class VoskEar {
         Object[] p = picked(json);
         String t = (String) p[0];
         if (t.isEmpty()) return;
-        gBuf.append(t);
-        gConf = Math.min(gConf, (Float) p[1]);
+        gList.add(t);
+        gConfs.add((Float) p[1]);
     }
 
-    private void deliver(String picked, float conf, String free) {
-        final String g = picked == null ? "" : picked.trim();
+    private void deliver(java.util.List<String> picks, java.util.List<Float> confs, String free) {
+        final java.util.ArrayList<String> g = new java.util.ArrayList<>(picks);
+        final java.util.ArrayList<Float> c = new java.util.ArrayList<>(confs);
         final String f = free == null ? "" : free.trim();
         if (g.isEmpty() && f.isEmpty()) return;
         statHeard++;
-        final float cf = g.isEmpty() ? 0f : conf;
         main.post(() -> {
             Listener l = listener;
-            if (l != null) l.onHeard(g, cf, f);
+            if (l != null) l.onHeard(g, c, f);
         });
     }
 
