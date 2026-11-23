@@ -22,130 +22,19 @@ import java.util.List;
  * HUD 화면이 떠 있는 동안만 듣고, 폰이 뜨거우면(42℃ 이상) 쉬었다가 39℃ 아래로 내려가면 다시 들음.
  * "조아야 집" 처럼 이어서 말하면 바로 그곳으로 안내.
  */
-final class WakeWord implements VoskEar.Listener {
+final class WakeWord {
 
     private final android.content.Context act; // HUD 화면 또는 VoiceService (HUD 밖에서도 들음)
     private final Handler h = new Handler(Looper.getMainLooper());
     private SpeechRecognizer sr;
     private boolean on = false;
     private boolean hot = false;
-    /** 계속 듣는 귀(VoskEar)도 보는 '뜨거움' 상태 */
-    static volatile boolean hotNow = false;
-    /** 계속 듣는 귀를 쓰는 중 */
-    private boolean usingVosk = false;
-    /** 마지막으로 들은 말이 계속 듣는 귀에서 왔나 (목적지는 정확한 인식기로 다시 물음) */
-    private boolean heardByVosk = false;
-    private long lastIgnoredLog = 0;
-    /** 마이크 소리 크기 (기록용) */
-    static volatile int micLevel = 0;
-    /** 앱이 말하는 중 "하이 조아"가 들리면 말을 끊음 (HUD가 등록) */
-    static volatile Runnable shutUp;
     private int errors = 0;
     private int savedSystemVol = -1;
     /** 폰 안 인식기(소리 없음)를 쓰는 중인지. 안 되면 구글 인식기로 바꾸고 기억함 */
     private boolean onDevice = false;
     private static boolean onDeviceFailed = false;
 
-    // ───── 티맵이 앞에 있을 때: 우리 앱이 직접 마이크를 열어 인식기에 소리를 넘겨줌 ─────
-    // (티맵이 앞에 나오면 인식기가 스스로 마이크를 못 잡아 오류 5·무응답이 남.
-    //  접근성 서비스가 있는 우리 앱이 녹음해서 파이프로 넘기면 인식기는 마이크를 안 열어도 됨)
-    private android.media.AudioRecord rec;
-    private volatile boolean recOn = false;
-    private android.os.ParcelFileDescriptor recRead, recWrite;
-    private static boolean extFailed = false, extLogged = false;
-    private int extQuickErrs = 0;
-    private long extStartAt = 0;
-    private volatile int recPeak = 0;
-    private long silentSince = 0, lastSilentLog = 0;
-    private boolean usingExt = false;
-
-    private boolean wantExt() {
-        if (extFailed || android.os.Build.VERSION.SDK_INT < 33) return false;
-        if (!act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ext_mic", true)) return false;
-        return !HudActivity.visible || TmapA11yService.mapMode; // HUD가 안 보일 때(티맵·지도·반반)
-    }
-
-    /** 녹음 시작 → 인식기에 넘길 읽는 쪽 파이프. 실패하면 null */
-    private android.os.ParcelFileDescriptor startExt() {
-        stopExt();
-        try {
-            int rate = 16000;
-            int min = android.media.AudioRecord.getMinBufferSize(rate, android.media.AudioFormat.CHANNEL_IN_MONO,
-                    android.media.AudioFormat.ENCODING_PCM_16BIT);
-            rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION, rate,
-                    android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 3200) * 2);
-            if (rec.getState() != android.media.AudioRecord.STATE_INITIALIZED) {
-                rec.release();
-                rec = null;
-                return null;
-            }
-            android.os.ParcelFileDescriptor[] pp = android.os.ParcelFileDescriptor.createPipe();
-            recRead = pp[0];
-            recWrite = pp[1];
-            final android.media.AudioRecord r = rec;
-            final java.io.OutputStream out = new android.os.ParcelFileDescriptor.AutoCloseOutputStream(recWrite);
-            r.startRecording();
-            recOn = true;
-            new Thread(() -> {
-                byte[] buf = new byte[3200];
-                long winStart = System.currentTimeMillis();
-                int peak = 0;
-                try {
-                    while (recOn) {
-                        int n = r.read(buf, 0, buf.length);
-                        if (n <= 0) break;
-                        for (int k = 0; k + 1 < n; k += 2) {
-                            int v = Math.abs((short) ((buf[k] & 0xff) | (buf[k + 1] << 8)));
-                            if (v > peak) peak = v;
-                        }
-                        out.write(buf, 0, n);
-                        long now = System.currentTimeMillis();
-                        if (now - winStart > 1000) {
-                            recPeak = peak;
-                            if (peak > 0) micAliveAt = now;
-                            checkSilence(peak, now);
-                            peak = 0;
-                            winStart = now;
-                        }
-                    }
-                } catch (Exception ignored) {
-                } finally {
-                    try { out.close(); } catch (Exception ignored) { }
-                }
-            }, "joa-mic").start();
-            return recRead;
-        } catch (Throwable t) {
-            NavListenerService.log("직접 마이크 열기 실패: " + t.getMessage());
-            stopExt();
-            return null;
-        }
-    }
-
-    /** 소리가 계속 0이면 다른 앱이 마이크를 쥐고 있는 것 → 기록에 알림 (2분에 한 번) */
-    private void checkSilence(int peak, long now) {
-        if (peak > 30) {
-            silentSince = 0;
-            return;
-        }
-        if (silentSince == 0) silentSince = now;
-        if (now - silentSince > 8000 && now - lastSilentLog > 120_000L) {
-            lastSilentLog = now;
-            NavListenerService.log("마이크에 소리가 전혀 안 들어옴 → 다른 앱(티맵 음성 호출 '아리아' 등)이 마이크를 쓰는 중. 티맵 설정에서 음성 호출을 꺼 주세요");
-        }
-    }
-
-    private void stopExt() {
-        recOn = false;
-        android.media.AudioRecord r = rec;
-        rec = null;
-        if (r != null) {
-            try { r.stop(); } catch (Exception ignored) { }
-            try { r.release(); } catch (Exception ignored) { }
-        }
-        try { if (recRead != null) recRead.close(); } catch (Exception ignored) { }
-        recRead = null;
-        recWrite = null;
-    }
     /** 이 시각까지는 폰 안 인식기를 쉬고 구글 인식기로 (티맵이 앞에 있을 때 오류 5가 계속 나는 경우) */
     private static long onDeviceRestUntil = 0;
     private int clientErrs = 0;
@@ -170,7 +59,28 @@ final class WakeWord implements VoskEar.Listener {
         return w.isEmpty() ? "조아야" : w;
     }
 
+    /** 예전 계속 듣기용 음성 모델(약 90MB)이 남아 있으면 지움 */
+    private static boolean cleaned = false;
+
+    private void cleanOldModel() {
+        if (cleaned) return;
+        cleaned = true;
+        final java.io.File d = new java.io.File(act.getFilesDir(), "vosk-model-small-ko-0.22");
+        if (!d.exists()) return;
+        new Thread(() -> {
+            del(d);
+            NavListenerService.log("쓰지 않는 음성 모델 지움 (저장공간 약 90MB 확보)");
+        }).start();
+    }
+
+    private static void del(java.io.File f) {
+        java.io.File[] k = f.listFiles();
+        if (k != null) for (java.io.File x : k) del(x);
+        f.delete();
+    }
+
     void start() {
+        cleanOldModel();
         SharedPreferences p = act.getSharedPreferences("hud", Activity.MODE_PRIVATE);
         if (!p.getBoolean("wake_on", true)) return;
         if (act.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -194,9 +104,6 @@ final class WakeWord implements VoskEar.Listener {
 
     void stop() {
         on = false;
-        if (usingVosk) VoskEar.stopAll();
-        usingVosk = false;
-        stopExt();
         stallH.removeCallbacks(stallCheck);
         try {
             if (tts != null) tts.shutdown();
@@ -248,7 +155,7 @@ final class WakeWord implements VoskEar.Listener {
      * 티맵 안내 음성(0.3초 넘게 이어지는 소리)이나 앱 음성 답이 나올 때만 켬. 짧은 '띵'은 묻힘.
      */
     private boolean steady() {
-        return on && !onDevice && !usingVosk && act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ding_block", true);
+        return on && !onDevice && act.getSharedPreferences("hud", Activity.MODE_PRIVATE).getBoolean("ding_block", true);
     }
 
     /** 앱이 음성으로 답하는 동안(ms) 미디어 소리를 켜 둠 */
@@ -391,7 +298,7 @@ final class WakeWord implements VoskEar.Listener {
             if (lastAlive > 0 && now - lastAlive > 45_000L && !DestActivity.visible && !AutoService.parked() && !hot) {
                 if (now - lastStallLog > 120_000L) {
                     lastStallLog = now;
-                    NavListenerService.log("부르는 말 듣기가 멈춰 있어서 다시 시작" + (TmapA11yService.mapMode ? " (지도 화면 중)" : ""));
+                    NavListenerService.log("부르는 말 듣기가 멈춰 있어서 다시 시작");
                 }
                 if (sr != null) {
                     try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
@@ -428,11 +335,9 @@ final class WakeWord implements VoskEar.Listener {
         float t = temp();
         if (hot && t < 39f) {
             hot = false;
-            hotNow = false;
             NavListenerService.log("폰 온도 " + t + "℃ → 부르는 말 다시 듣기");
         } else if (!hot && t >= 42f) {
             hot = true;
-            hotNow = true;
             NavListenerService.log("폰이 뜨거움 " + t + "℃ → 부르는 말 듣기 잠시 멈춤");
         }
         if (hot) {
@@ -441,30 +346,7 @@ final class WakeWord implements VoskEar.Listener {
             return;
         }
         // ── 계속 듣는 귀 (모델이 있으면): 끊기는 틈 없이 듣고, 티맵이 앞에 있어도 들음 ──
-        // HUD 화면이 보일 땐 잘 되던 구글 인식기, 티맵·지도·반반 화면일 땐(구글이 오류 5로 멈춤) 폰 안 작은 모델
-        boolean needEar = !HudActivity.visible || TmapA11yService.mapMode;
-        if (needEar && VoskEar.usable(act)) {
-            if (!usingVosk) {
-                usingVosk = true;
-                if (sr != null) {
-                    try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
-                    sr = null;
-                }
-                stopExt();
-                h.removeCallbacks(quietRestart);
-                musicMute(false);
-            }
-            VoskEar.start(act, this);
-            status = "'" + word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)) + "' 계속 듣는 중";
-            h.postDelayed(this::listen, 2_000); // 2초마다 확인 (HUD 화면으로 돌아오면 바로 구글 인식기로)
-            return;
-        }
-        if (usingVosk) { // 계속 듣는 귀 끄고 마이크를 놓아준 뒤 구글 인식기로
-            usingVosk = false;
-            VoskEar.stopAll();
-            h.postDelayed(this::listen, 400);
-            return;
-        }
+
         if (tmapTalking()) { // 티맵 안내 음성 중엔 '띵'이 겹치지 않게 끝날 때까지 기다림
             long now = System.currentTimeMillis();
             if (musicWaitSince == 0) musicWaitSince = now;
@@ -506,23 +388,7 @@ final class WakeWord implements VoskEar.Listener {
                     .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true) // 폰 안에서 처리(데이터·열 절약), 안 되면 자동으로 온라인
                     .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L);
-            usingExt = false;
-            if (wantExt()) {
-                android.os.ParcelFileDescriptor src = startExt();
-                if (src != null) {
-                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src)
-                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
-                            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000);
-                    usingExt = true;
-                    extStartAt = System.currentTimeMillis();
-                    if (!extLogged) {
-                        extLogged = true;
-                        NavListenerService.log("HUD 밖(티맵·지도·반반)에선 앱이 직접 마이크를 열어 '조아야'를 들음");
-                    }
-                }
-            } else stopExt();
-            if (!onDevice && !usingExt) musicMute(true);
+            if (!onDevice) musicMute(true);
             sr.cancel();
             sr.startListening(i);
             h.removeCallbacks(quietRestart);
@@ -571,7 +437,6 @@ final class WakeWord implements VoskEar.Listener {
         @Override
         public void onResults(Bundle b) {
             alive();
-            if (usingExt) extQuickErrs = 0;
             micAliveAt = System.currentTimeMillis();
             clientErrs = 0;
             errors = 0;
@@ -591,15 +456,6 @@ final class WakeWord implements VoskEar.Listener {
         @Override
         public void onError(int e) {
             alive();
-            // 인식기가 '직접 넘긴 소리'를 못 받는 폰이면 곧바로 오류 → 두 번이면 이 방식 끄기
-            if (usingExt && e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                    && System.currentTimeMillis() - extStartAt < 1500) {
-                if (++extQuickErrs >= 2) {
-                    extFailed = true;
-                    stopExt();
-                    NavListenerService.log("이 폰 인식기는 앱이 넘긴 소리를 못 받음 (오류 " + e + ") → 예전 방식으로 듣기");
-                }
-            }
             long nowE = System.currentTimeMillis();
             if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && nowE - lastErrLog > 60_000L) {
                 lastErrLog = nowE;
@@ -691,11 +547,6 @@ final class WakeWord implements VoskEar.Listener {
 
     /** 목적지로 길안내 (이때만 목적지 화면을 띄움) */
     private void goDest(String said) {
-        if (heardByVosk) {
-            // 계속 듣는 귀는 짧은 명령엔 충분하지만 장소 이름은 틀리기 쉬움 → 목적지 화면이 정확한 인식기로 다시 물음
-            NavListenerService.log("장소 이름은 정확한 인식기로 다시 물어봄");
-            said = null;
-        }
         if (sr != null) {
             try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
             sr = null;
@@ -710,91 +561,6 @@ final class WakeWord implements VoskEar.Listener {
     /** "조아야"를 폰이 자주 이렇게 알아들음 → 뒤에 말이 이어질 때만 부르는 말로 인정 */
     private static final String[] JOA_ALIAS = {"좋아요", "좋아야", "조아요", "좋아", "조아", "하이좋아", "하이조아"};
 
-    // ───── 계속 듣는 귀에서 온 말 ─────
-
-    @Override
-    public void onHeard(java.util.List<String> picks, java.util.List<Float> confs, String free) {
-        if (!on || !usingVosk) return;
-        alive();
-        long now = System.currentTimeMillis();
-        micAliveAt = now;
-        String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
-        boolean any = false;
-        // 고른 말 조각을 하나씩 순서대로: "하이 조아" 조각 → 부르기, 그 뒤 조각 → 명령
-        for (int k = 0; k < picks.size(); k++) {
-            String g = picks.get(k);
-            float conf = confs.get(k);
-            boolean follow = System.currentTimeMillis() < followUntil;
-            boolean wake = conf >= 0.70f && strongWake(g, w) && after(g, w) != null;
-            boolean cmd = follow && conf >= 0.60f && !strongWake(g, w);
-            if (!wake && !cmd) continue;
-            if (!wake && (System.currentTimeMillis() < ttsUntil + 800 || isEcho(g))) continue; // 자기 목소리
-            if (!wake && isNavVoice(free)) continue;                                           // 티맵 안내 음성
-            NavListenerService.log("들음: \"" + g + "\" (확신 " + Math.round(conf * 100) + "%)");
-            any = true;
-            heardByVosk = true;
-            java.util.ArrayList<String> l = new java.util.ArrayList<>();
-            l.add(g);
-            check(l);
-            heardByVosk = false;
-        }
-        if (any) return;
-        // 부른 뒤 목록에 없는 말(자유 대화·장소) → 받아쓰기로
-        if (now < followUntil && !free.isEmpty() && !isNavVoice(free) && now >= ttsUntil + 800 && !isEcho(free)) {
-            NavListenerService.log("들음(받아쓰기): \"" + free + "\"");
-            heardByVosk = true;
-            java.util.ArrayList<String> l = new java.util.ArrayList<>();
-            l.add(free);
-            check(l);
-            heardByVosk = false;
-            return;
-        }
-        if (now - lastIgnoredLog > 20_000L) { // 무엇을 듣고 있는지 기록 (20초에 한 줄)
-            lastIgnoredLog = now;
-            StringBuilder b = new StringBuilder();
-            for (int k = 0; k < picks.size(); k++)
-                b.append(k > 0 ? ", " : "").append(picks.get(k)).append('(').append(Math.round(confs.get(k) * 100)).append("%)");
-            NavListenerService.log("들렸지만 부르는 말 없음: 고른 말 [" + b + "] / 받아쓰기 \"" + free + "\"");
-        }
-    }
-
-    @Override
-    public void onPartial(String text) {
-        if (!on || !usingVosk) return;
-        long now = System.currentTimeMillis();
-        if (now >= ttsUntil) return;
-        // 끼어들기: 앱이 말하는 중에 "하이 조아"가 들리면 바로 말을 멈춤
-        String w = word(act.getSharedPreferences("hud", Activity.MODE_PRIVATE)).replace(" ", "");
-        if (strongWake(text, w)) {
-            ttsUntil = 0;
-            try {
-                if (tts != null) tts.stop();
-                Runnable r = shutUp;
-                if (r != null) r.run();
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
-    /** 계속 듣는 귀가 멈춤(마이크·모델 문제) → 예전 방식으로 */
-    void earStopped() {
-        if (!on) return;
-        usingVosk = false;
-        again(800);
-    }
-
-    /** "하이 조아"(또는 설정한 부르는 말)가 확실히 들어 있나 — "좋아" 한 마디는 아님 */
-    static boolean strongWake(String text, String w) {
-        String s = text.replace(" ", "");
-        if (!w.isEmpty() && !w.equals("조아야") && s.contains(w)) return true;
-        if (s.contains("조아야")) return true;
-        return s.matches(".*(하이|아이|화이|타이|헤이|하이요)(조아|좋아|조와|죠아|좋와|조아야|좋아야).*");
-    }
-
-    private static boolean isNavVoice(String t) {
-        String s = t.replace(" ", "");
-        return s.endsWith("입니다") || s.contains("잠시후") || s.contains("전방") || s.contains("미터앞") || s.contains("경로를");
-    }
 
     private boolean check(List<String> heard) {
         SharedPreferences p = act.getSharedPreferences("hud", Activity.MODE_PRIVATE);

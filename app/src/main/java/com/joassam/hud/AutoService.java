@@ -138,7 +138,6 @@ public class AutoService extends Service {
         NavListenerService.log("🔑 시동 켜짐(충전 시작)");
         updateNoti("🚗 운행 중");
         ignOnAt = System.currentTimeMillis();
-        VoskEar.preload(this);
         driveDnd(true);
         if (HudActivity.visible || DestActivity.visible) return;
         Intent i;
@@ -226,7 +225,6 @@ public class AutoService extends Service {
         SharedPreferences p = getSharedPreferences("hud", MODE_PRIVATE);
         if (ignOn) return; // 그사이 다시 시동 켜짐
         VoiceService.stop(this); // 주차 중엔 마이크 끔
-        TmapA11yService.stopMapMode();
         Brain.forget();
         if (p.getBoolean("auto_close", true) && HudActivity.visible) {
             HudActivity.closeIfOpen();

@@ -94,12 +94,6 @@ public class HudActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        WakeWord.shutUp = () -> { // 앱이 말하는 중 "하이 조아" → 말 멈춤 (끼어들기)
-            try {
-                if (tts != null) tts.stop();
-            } catch (Exception ignored) {
-            }
-        };
         prefs = getSharedPreferences("hud", MODE_PRIVATE);
         current = new java.lang.ref.WeakReference<>(this);
         // HUD 밖에서 부른 명령으로 HUD가 켜진 경우: 뜬 뒤 그 명령 실행
@@ -364,7 +358,7 @@ public class HudActivity extends Activity {
     static boolean looksLikeCommand(String said) {
         String s = said.replace(" ", "");
         return colorByName(s) >= 0 || has(s, "뒤집", "가로", "세로", "반전", "밝게", "어둡게", "크게", "작게", "소리", "볼륨",
-                "지도", "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투", "반반", "분할", "나눠", "정리", "하이패스", "요금소", "톨게이트");
+                "경로", "안내", "티맵", "HUD", "허드", "다시시작", "구간", "몇시", "속도", "도움말", "경고", "주차번호", "블루투스", "블투", "정리");
     }
 
     /** 목적지 화면 등 다른 화면에서 들은 말도 HUD 명령이면 처리 */
@@ -427,7 +421,6 @@ public class HudActivity extends Activity {
             });
         }
         if (has(s, "HUD켜", "HUD보여", "HUD로", "허드켜", "허드보여", "헤드업켜", "헤드업보여", "헤드업으로", "에이치유디켜")) {
-            TmapA11yService.stopMapMode();
             startActivity(new android.content.Intent(this, HudActivity.class)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             return "HUD를 보여 드릴게요";
@@ -436,62 +429,9 @@ public class HudActivity extends Activity {
             TmapA11yService.cleanUp();
             return "화면 정리할게요";
         }
-        if (has(s, "하이패스", "요금소", "톨게이트", "차로보여", "차선보여")) {
-            // 요금소 차로(하이패스·현금·카드)는 티맵 지도 화면에만 나와서, 지도를 20초 보여 줌
-            if (VoiceService.running && TmapA11yService.startMapMode()) {
-                TmapA11yService.mapAutoOffAt = System.currentTimeMillis() + 20_000L;
-                return "요금소 차로를 20초 보여 드릴게요";
-            }
-            return "티맵 지도 화면에서 차로를 확인해 주세요";
-        }
-        if (TmapA11yService.splitMode && has(s, "좌우바꿔", "자리바꿔", "위치바꿔", "반대로")) {
-            SharedPreferences sp = getSharedPreferences("hud", MODE_PRIVATE);
-            sp.edit().putBoolean("split_swap", !sp.getBoolean("split_swap", false)).apply();
-            return "지도와 HUD 자리를 바꿨어요";
-        }
-        if (has(s, "반반", "반씩", "화면나눠", "나눠서", "분할", "나눠보여", "같이보여", "둘다보여", "반쪽")) {
-            if (VoiceService.running && TmapA11yService.startSplitMode())
-                return "반은 티맵, 반은 HUD로 나눠 볼게요. 돌아갈 땐 HUD 보여 라고 하세요";
-            return "반반 화면은 어느 화면에서나 듣기가 켜져 있어야 돼요";
-        }
-        if (has(s, "지도", "경로보여", "전체경로", "티맵보여", "티맵켜", "티맵화면", "길보여")) {
-            // 지도 모드에선 HUD 화면이 뒤로 가므로, 어느 화면에서나 듣는 서비스가 돌 때만 (그래야 "HUD 보여"로 돌아옴)
-            if (VoiceService.running && TmapA11yService.startMapMode()) return "티맵 지도를 뒤집어서 보여 드릴게요. 돌아갈 땐 HUD 보여 라고 하세요";
-            // 안드로이드 14 미만이면 뒤집기 없이 티맵만 띄움 (15초 뒤 HUD로)
-            android.content.Intent t = getPackageManager().getLaunchIntentForPackage(TmapA11yService.TMAP);
-            if (t == null) return "티맵을 찾지 못했어요";
-            TmapA11yService.mapViewUntil = System.currentTimeMillis() + 60_000L;
-            startActivity(t.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
-            return "지도를 보여 드릴게요. 15초 지나면 HUD로 돌아와요";
-        }
-        // 지도 반사 모드 중 방향 바꾸기 (지도만 따로 돌림)
-        if (TmapA11yService.mapMode) {
-            int rot = prefs.getInt("map_rot", 0);
-            String r = null;
-            if (has(s, "뒤집", "거꾸로", "180도", "반대로")) { rot = (rot + 180) % 360; r = "지도를 뒤집었어요"; }
-            else if (has(s, "돌려", "회전", "90도")) { rot = (rot + 90) % 360; r = "지도를 돌렸어요"; }
-            else if (has(s, "가로")) { rot = (rot / 180) * 180 + 90; r = "지도를 가로로 돌렸어요"; }
-            else if (has(s, "세로")) { rot = (rot / 180) * 180; r = "지도를 세로로 돌렸어요"; }
-            else if (has(s, "좌우반전", "좌우바꿔", "거울")) {
-                prefs.edit().putBoolean("mirror_h", !prefs.getBoolean("mirror_h", true)).apply();
-                applyMirror();
-                TmapA11yService.mapTransformChanged();
-                return "좌우를 바꿨어요";
-            } else if (has(s, "상하반전", "위아래")) {
-                prefs.edit().putBoolean("flip_v", !prefs.getBoolean("flip_v", false)).apply();
-                applyMirror();
-                TmapA11yService.mapTransformChanged();
-                return "위아래를 바꿨어요";
-            }
-            if (r != null) {
-                prefs.edit().putInt("map_rot", rot % 360).apply();
-                TmapA11yService.mapTransformChanged();
-                return r;
-            }
-        }
         if (has(s, "도움말", "뭐할수", "명령어", "사용법", "뭐라고말", "할수있는")) {
-            return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 지도 보여, 경로 다시, 목적지 바꿔, "
-                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼, 반반 화면, 하이패스, 정리해 예요. "
+            return "말할 수 있는 명령은, 뒤집어, 가로로, 흰색으로, 크게, 밝게, 어둡게, 소리 크게, 경로 다시, 목적지 바꿔, "
+                    + "안내 종료, 티맵 꺼, HUD 꺼, 다시 시작, 구간 끝, 몇 시야, 지금 속도, 경고 꺼, 경고 켜, 블루투스 켜, 블루투스 꺼, 정리해 예요. "
                     + "명령 뒤 20초 동안은 부르는 말 없이 바로 말해도 돼요"
                     + (Brain.enabled(this) ? ". 그 밖의 말은 AI가 알아들어요" : "");
         }
@@ -583,8 +523,8 @@ public class HudActivity extends Activity {
     private static final String[] CANON = {
             "뒤집어", "가로로", "세로로", "좌우반전", "상하반전", "색바꿔", "흰색", "초록색", "하늘색", "노란색", "주황색",
             "크게", "작게", "밝게", "어둡게", "소리크게", "소리작게", "HUD꺼", "다시시작", "경로다시", "목적지바꿔",
-            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜", "지도보여",
-            "블루투스켜", "블루투스꺼", "반반화면", "정리해", "하이패스"};
+            "안내종료", "티맵꺼", "구간끝", "몇시야", "지금속도", "구간평균", "도움말", "경고꺼", "경고켜",
+            "블루투스켜", "블루투스꺼", "정리해"};
 
     private static String canon(String s) {
         if (s.length() > 8) return s;
@@ -787,7 +727,6 @@ public class HudActivity extends Activity {
     protected void onResume() {
         super.onResume();
         visible = true;
-        if (TmapA11yService.mapMode) TmapA11yService.stopMapMode(); // HUD가 다시 보이면 지도·반반 모드 끝
         // "조아야" 듣기: 가능하면 HUD 밖(티맵·홈 화면)에서도 듣는 서비스로, 안 되면 HUD 화면에서만
         if (AutoService.ignOnAt > 0) { // 시동 뒤 HUD가 뜨기까지 걸린 시간 (느리다는 말 확인용)
             NavListenerService.log(String.format(java.util.Locale.ROOT, "HUD 화면 뜸 (시동 후 %.1f초)",

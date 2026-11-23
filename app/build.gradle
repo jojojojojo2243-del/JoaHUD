@@ -49,7 +49,4 @@ android {
 
 dependencies {
     implementation 'com.tmapmobility.tmap:tmap-edc-sdk:1.0.0.0051'
-    // 끊기지 않고 계속 듣는 폰 안 음성 인식 (무료·오프라인, 한국어 모델은 앱이 처음 한 번 내려받음)
-    implementation 'net.java.dev.jna:jna:5.13.0@aar'
-    implementation 'com.alphacephei:vosk-android:0.3.47@aar'
 }
