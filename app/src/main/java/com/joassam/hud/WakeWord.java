@@ -559,7 +559,14 @@ final class WakeWord {
     }
 
     /** "조아야"를 폰이 자주 이렇게 알아들음 → 뒤에 말이 이어질 때만 부르는 말로 인정 */
-    private static final String[] JOA_ALIAS = {"좋아요", "좋아야", "조아요", "좋아", "조아", "하이좋아", "하이조아"};
+    /**
+     * 부르는 말로 인정하는 것: "하이 조아"(하이·아이·화이·헤이 + 조아·좋아) 또는 "조아야/좋아야".
+     * "좋아" 한 마디는 일상 대화("그거 좋아 보이네")에 너무 흔해서 부르는 말이 아님 — 옆 사람과의 대화에 끼어들던 원인.
+     */
+    private static final String[] JOA_ALIAS = {"하이조아", "하이좋아", "아이조아", "아이좋아", "화이조아", "화이좋아",
+            "헤이조아", "헤이좋아", "하이조와", "좋아야", "조와야"};
+    /** 부르는 말은 말의 맨 앞(3글자 안)에 있어야 함 — 문장 중간에 섞인 소리로 반응하지 않게 */
+    private static final int WAKE_MAX_POS = 3;
 
 
     private boolean check(List<String> heard) {
@@ -602,8 +609,8 @@ final class WakeWord {
             // "조아야"만 부름 → 화면은 그대로 두고 소리로만 "네" 하고 다음 말을 기다림
             NavListenerService.log("부르기만 함 → 화면 그대로, 다음 말 기다림");
             long now = System.currentTimeMillis();
-            askedUntil = now + 12_000L;
-            followUntil = Math.max(followUntil, now + 12_000L);
+            askedUntil = now + 10_000L; // "네" 하고 10초만 기다림
+            followUntil = Math.max(followUntil, now + 10_000L);
             speak("네");
             again(900);
             return true;
@@ -618,19 +625,21 @@ final class WakeWord {
     private boolean handle(String said, boolean follow) {
         // HUD가 뒤에 살아 있으면 바로, 없으면 HUD를 띄우면서 실행 (티맵·홈 화면에서 불러도 됨)
         if (HudActivity.command(said)) {
-            followUntil = System.currentTimeMillis() + 20_000L;
+            // 명령 뒤엔 이어 듣지 않음 (예전 20초 동안 아무 말이나 받아 옆 사람 대화에 끼어들었음)
+            followUntil = 0;
             again(1500);
             return true;
         }
         if (Brain.enabled(act)) {
-            followUntil = System.currentTimeMillis() + 25_000L;
+            // AI 대답 뒤 8초만 이어서 들음 (AI가 되물었을 때 바로 대답할 수 있게). 그 뒤엔 다시 "하이 조아"가 있어야 함
+            followUntil = System.currentTimeMillis() + 8_000L + 4_000L; // 대답을 말하는 시간 약 4초 포함
             HudActivity.brain(act, said);
             again(2500);
             return true;
         }
         if (!HudActivity.alive() && HudActivity.looksLikeCommand(said)) {
             HudActivity.openWith(act, "voice", said); // HUD가 꺼져 있으면 띄운 뒤 명령 실행
-            followUntil = System.currentTimeMillis() + 20_000L;
+            followUntil = 0;
             again(2500);
             return true;
         }
@@ -641,13 +650,16 @@ final class WakeWord {
     static String after(String said, String wake) {
         if (said.isEmpty() || wake.isEmpty()) return null;
         int at = said.indexOf(wake);
-        if (at >= 0) return said.substring(at + wake.length()).trim();
-        // 비슷한 발음 ("조아야" ↔ "좋아야", "조아 야")
+        if (at >= 0 && at <= WAKE_MAX_POS) return said.substring(at + wake.length()).trim();
+        // 비슷한 발음 ("조아야" ↔ "좋아야", "조아 야") — 3글자 짜리 짧은 말은 엉뚱한 말과도 비슷해서 더 엄격하게
         int n = wake.length();
-        for (int len = Math.max(1, n - 1); len <= n + 1; len++) {
-            for (int i = 0; i + len <= said.length(); i++) {
+        if (n < 3) return null;
+        for (int len = Math.max(2, n - 1); len <= n + 1; len++) {
+            for (int i = 0; i + len <= said.length() && i <= WAKE_MAX_POS; i++) {
                 String part = said.substring(i, i + len);
-                if (VoicePick.similar(part, wake) >= 0.75) return said.substring(i + len).trim();
+                // "조아야"처럼 '야'로 끝나는 부르는 말은 비슷한 말도 '야'로 끝나야 함 ("좋아요"는 대화)
+                if (wake.endsWith("야") && !part.endsWith("야")) continue;
+                if (VoicePick.similar(part, wake) >= 0.85) return said.substring(i + len).trim();
             }
         }
         return null;
