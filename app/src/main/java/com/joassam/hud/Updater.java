@@ -162,9 +162,21 @@ public class Updater {
         post(cb, msg);
     }
 
+    private static String lastLogged = "";
+    private static long lastLoggedAt = 0;
+
     private static void post(Callback cb, String msg) {
         lastMessage = msg;
-        NavListenerService.log("업데이트: " + msg);
+        // "최신 버전입니다"는 기록에 남기지 않음 (밤새 15분마다 쌓여 중요한 기록을 밀어냈음).
+        // 같은 실패 메시지도 1시간에 한 번만. 새 버전·설치 소식은 항상 남김
+        long now = System.currentTimeMillis();
+        boolean upToDate = msg.startsWith("최신 버전");
+        boolean repeat = msg.equals(lastLogged) && now - lastLoggedAt < 3600_000L;
+        if (!upToDate && !repeat) {
+            NavListenerService.log("업데이트: " + msg);
+            lastLogged = msg;
+            lastLoggedAt = now;
+        }
         if (cb != null) new Handler(Looper.getMainLooper()).post(() -> cb.on(msg));
     }
 
