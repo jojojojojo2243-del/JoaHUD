@@ -71,6 +71,9 @@ public class AutoService extends Service {
     static volatile long offAt = 0;
 
     /** 시동이 꺼진 상태(꺼진 지 30분 안) → HUD를 자동으로 다시 띄우면 안 됨 */
+    /** 이번 시동에서 방해 금지를 켜 봤나 */
+    private boolean dndTried = false;
+
     /** 시동 켜진 시각 (HUD가 뜨기까지 걸린 시간 기록용) */
     static volatile long ignOnAt = 0;
 
@@ -138,7 +141,9 @@ public class AutoService extends Service {
         NavListenerService.log("🔑 시동 켜짐(충전 시작)");
         updateNoti("🚗 운행 중");
         ignOnAt = System.currentTimeMillis();
-        driveDnd(true);
+        dndTried = false;
+        // 방해 금지는 여기서 바로 켜지 않음: 집·사무실에서 충전기에 꽂아도 '시동'으로 보여 켜지던 문제.
+        // 차가 실제로 움직이기 시작하면 check()에서 켬
         if (HudActivity.visible || DestActivity.visible) return;
         Intent i;
         if (DestActivity.hasResume(this)) i = new Intent(this, DestActivity.class).putExtra("resume", true);
@@ -349,6 +354,13 @@ public class AutoService extends Service {
 
     private void check() {
         A11yGuard.ensure(this);   // 안내판 읽기가 꺼지면 바로 다시 켬
+        // 방해 금지: 충전 중이면서 차가 실제로 달릴 때만 켜고(시속 8km 넘게), 시동 꺼짐이면 반드시 끔
+        boolean dndByUs = getSharedPreferences("hud", MODE_PRIVATE).getBoolean("dnd_by_us", false);
+        if (ignOn && !dndByUs && !dndTried && HudActivity.movingRecently()) {
+            dndTried = true; // 시동 한 번에 한 번만 (운전 중 직접 끄면 다시 켜지 않음)
+            driveDnd(true);
+        }
+        else if (!ignOn && dndByUs) driveDnd(false);
         int st = queryCarState();
         // 주차 중(차량 미연결)이고 인터넷이 될 때 15분마다 업데이트 확인·설치
         // (운전 중에는 HUD가 꺼지지 않도록 설치하지 않음)
