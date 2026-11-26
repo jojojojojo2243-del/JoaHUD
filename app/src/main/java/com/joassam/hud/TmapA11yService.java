@@ -586,7 +586,7 @@ public class TmapA11yService extends AccessibilityService {
         if (r == null) {
             status = "티맵 미니 안내 창을 찾는 중 (서브폰 티맵 길안내 → 홈 버튼)";
             long now = System.currentTimeMillis();
-            if (now - lastWidgetLog > 60000) {
+            if (now - lastWidgetLog > 600_000L) { // 10분에 한 번만 (1분마다 쌓여 기록을 밀어냈음)
                 lastWidgetLog = now;
                 NavListenerService.log("서브폰 화면에서 티맵 미니 안내 창 없음 " + windowDiag());
             }

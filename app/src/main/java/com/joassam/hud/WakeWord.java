@@ -19,7 +19,7 @@ import java.util.List;
 
 /**
  * 운전 중 "조아야"(바꿀 수 있음) 하고 부르면 목적지 화면을 띄움.
- * HUD 화면이 떠 있는 동안만 듣고, 폰이 뜨거우면(42℃ 이상) 쉬었다가 39℃ 아래로 내려가면 다시 들음.
+ * HUD 화면이 떠 있는 동안만 듣고, 폰이 아주 뜨거우면(48℃ 이상) 쉬었다가 44℃ 아래로 내려가면 다시 들음.
  * "조아야 집" 처럼 이어서 말하면 바로 그곳으로 안내.
  */
 final class WakeWord {
@@ -341,12 +341,16 @@ final class WakeWord {
             return;
         }
         float t = temp();
-        if (hot && t < 39f) {
+        // 듣기는 가벼운 일이라 웬만큼 뜨거워도 계속 들음 (42℃에서 멈춰서 운전 중 대답을 안 했음).
+        // 열은 화면 찍기·밝기를 줄여서 낮추고(Thermal), 정말 위험한 48℃에서만 쉼 — 쉬기 전에 말로 알림
+        if (hot && t < 44f) {
             hot = false;
             NavListenerService.log("폰 온도 " + t + "℃ → 부르는 말 다시 듣기");
-        } else if (!hot && t >= 42f) {
+            speak("폰 온도가 내려가서 다시 들을게요");
+        } else if (!hot && t >= 48f) {
             hot = true;
-            NavListenerService.log("폰이 뜨거움 " + t + "℃ → 부르는 말 듣기 잠시 멈춤");
+            NavListenerService.log("폰이 너무 뜨거움 " + t + "℃ → 부르는 말 듣기 잠시 멈춤");
+            speak("폰이 너무 뜨거워서 잠깐 못 들어요");
         }
         if (hot) {
             status = "폰이 뜨거워 쉬는 중 (" + t + "℃)";
