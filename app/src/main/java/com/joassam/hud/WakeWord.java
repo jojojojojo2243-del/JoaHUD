@@ -285,6 +285,7 @@ final class WakeWord {
     private volatile long lastAlive = 0;
     private long musicWaitSince = 0;
     private long lastErrLog = 0;
+    private long lastMissLog = 0;
     private long lastStallLog = 0;
 
     private void alive() {
@@ -601,7 +602,8 @@ final class WakeWord {
      * "좋아" 한 마디는 일상 대화("그거 좋아 보이네")에 너무 흔해서 부르는 말이 아님 — 옆 사람과의 대화에 끼어들던 원인.
      */
     private static final String[] JOA_ALIAS = {"하이조아", "하이좋아", "아이조아", "아이좋아", "화이조아", "화이좋아",
-            "헤이조아", "헤이좋아", "하이조와", "좋아야", "조와야"};
+            "헤이조아", "헤이좋아", "하이조와", "타이조아", "타이좋아", "바이조아", "바이좋아", "하이죠아", "하이초아",
+            "좋아야", "조와야"};
     /** 부르는 말은 말의 맨 앞(3글자 안)에 있어야 함 — 문장 중간에 섞인 소리로 반응하지 않게 */
     private static final int WAKE_MAX_POS = 3;
 
@@ -626,18 +628,27 @@ final class WakeWord {
                 }
             }
         }
-        for (String s : heard) {
+        for (String s0 : heard) {
+            String s = s0.toLowerCase(java.util.Locale.ROOT).replace("hi", "하이").replace("high", "하이");
             String rest = after(s.replace(" ", ""), w);
             if (rest == null && w.contains("조아")) {
                 for (String a : JOA_ALIAS) {
                     String r = after(s.replace(" ", ""), a);
-                    if (r != null && !r.isEmpty()) {
+                    // "하이 조아"만 불러도 인정 (예전엔 뒤에 말이 붙어야만 인정해서 부르기만 하면 무시됐음)
+                    if (r != null) {
                         rest = r;
                         break;
                     }
                 }
             }
-            if (rest == null) continue;
+            if (rest == null) {
+                long nowL = System.currentTimeMillis();
+                if (nowL - lastMissLog > 20_000L) { // 무엇을 들었는지 기록 (못 알아들을 때 원인 찾기용, 20초에 한 줄)
+                    lastMissLog = nowL;
+                    NavListenerService.log("들렸지만 부르는 말 아님: \"" + s0 + "\"");
+                }
+                continue;
+            }
             if (rest.replaceAll("[\\s.,!?~]", "").length() < 2) rest = ""; // "하이 좋아" → 남은 "아" 같은 찌꺼기는 버림
             NavListenerService.log("부르는 말 들음: \"" + s + "\"");
             if (!rest.isEmpty() && handle(rest, false)) return true;
