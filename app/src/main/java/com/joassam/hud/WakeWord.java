@@ -48,6 +48,7 @@ final class WakeWord {
         return micAliveAt > micErrAt && now - micAliveAt < 35_000L;
     }
     private boolean onDeviceWorked = false;
+    private int onDeviceBadStarts = 0;
     static volatile String status = "";
 
     WakeWord(android.content.Context a) {
@@ -81,6 +82,7 @@ final class WakeWord {
 
     void start() {
         cleanOldModel();
+        initTts();
         SharedPreferences p = act.getSharedPreferences("hud", Activity.MODE_PRIVATE);
         if (!p.getBoolean("wake_on", true)) return;
         if (act.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -315,6 +317,11 @@ final class WakeWord {
     private void listen() {
         if (!on) return;
         alive();
+        // 앱이 말하는 중("네" 등)엔 끝날 때까지 기다렸다가 들음
+        if (System.currentTimeMillis() < ttsUntil || (tts != null && ttsReady && tts.isSpeaking())) {
+            again(250);
+            return;
+        }
         // 목적지 화면이 마이크를 쓰는 중이면 비켜 줌
         if (DestActivity.visible) {
             if (sr != null) {
@@ -463,7 +470,9 @@ final class WakeWord {
                         ? " (마이크를 다른 앱이 쓰는 중 — 티맵 '아리아' 호출이 켜져 있으면 끄세요)" : ""));
             }
             // 폰 안 인식기가 한국어를 못 하거나 연결이 안 되면 → 구글 인식기로 바꿈
-            if (onDevice && !onDeviceWorked && (e == 5 || e == 11 || e == 12 || e == 13 || e == 14)) {
+            // '띵' 소리 없는 폰 안 인식기를 최대한 지킴: 한국어 미지원(12·13·14)이거나, 한 번도 안 되면서 5번 연속 꼬일 때만 구글로
+            if (onDevice && !onDeviceWorked && (e == 5 || e == 11)) onDeviceBadStarts++;
+            if (onDevice && !onDeviceWorked && (e == 12 || e == 13 || e == 14 || onDeviceBadStarts >= 5)) {
                 onDeviceFailed = true;
                 NavListenerService.log("폰 안 인식기 사용 불가(오류 " + e + ") → 구글 인식기로 바꿈");
                 if ((e == 12 || e == 13) && android.os.Build.VERSION.SDK_INT >= 33) {
@@ -498,13 +507,8 @@ final class WakeWord {
                 clientErrs++;
                 try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
                 sr = null;
-                // 폰 안 인식기가 30초 안에 3번 꼬이면(주로 티맵이 앞에 있을 때) 3분 동안 구글 인식기로
-                if (onDevice && clientErrs >= 3) {
-                    onDeviceRestUntil = n + 3 * 60_000L;
-                    clientErrs = 0;
-                    NavListenerService.log("폰 안 인식기가 계속 꼬임(오류 " + e + ") → 3분 동안 구글 인식기로 듣기 (띵 소리는 음소거)");
-                }
-                again(e == 8 ? 1500 : 600);
+                // 구글 인식기(띵 소리)로 넘기지 않고 폰 안 인식기를 새로 만들어 다시 들음 — 자주 꼬이면 조금씩 쉬었다가
+                again(e == 8 ? 1500 : Math.min(3000, 600L * clientErrs));
                 return;
             }
             if (e == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
@@ -527,8 +531,25 @@ final class WakeWord {
     private boolean ttsReady = false;
 
     /** 화면을 바꾸지 않고 소리로만 대답 */
+    /** 미리 말할 준비 (처음 "네"가 늦거나 빠지지 않게) */
+    private void initTts() {
+        if (tts != null) return;
+        try {
+            tts = new android.speech.tts.TextToSpeech(act.getApplicationContext(), st -> {
+                ttsReady = st == android.speech.tts.TextToSpeech.SUCCESS;
+                if (ttsReady && tts != null) tts.setLanguage(java.util.Locale.KOREAN);
+            });
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 운전 중엔 화면을 못 보니 소리로 대답: "네", "다시 말씀해 주세요" 등 */
     private void speak(String msg) {
         spoke(msg);
+        musicMute(false); // '띵' 막으려 꺼 둔 미디어 소리를 먼저 켜야 대답이 들림
+        if (sr != null) { // 대답하는 동안 인식기는 멈춤 (띠리링·자기 목소리 듣기 방지)
+            try { sr.cancel(); } catch (Exception ignored) { }
+        }
         try {
             if (tts == null) {
                 tts = new android.speech.tts.TextToSpeech(act.getApplicationContext(), st -> {
@@ -543,6 +564,22 @@ final class WakeWord {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    /** 장소로 가자는 말인가 ("대전역 가자", "집으로", "○○ 안내해 줘") */
+    static boolean destLike(String s) {
+        String t = s.replace(" ", "");
+        return t.matches(".*(가자|가줘|가주|가려|갈래|가고싶|안내|목적지|까지|으로|로가|집|회사|역|병원|마트|공항|휴게소|주유소|터미널|시청|학교|농장).*");
+    }
+
+    /** 부른 뒤 한 말을 못 알아들음 → 소리로 알리고 10초 더 기다림 */
+    private void notUnderstood(String said) {
+        NavListenerService.log("못 알아들음: \"" + said + "\" → 다시 말씀해 달라고 함");
+        long now = System.currentTimeMillis();
+        askedUntil = now + 12_000L;
+        followUntil = Math.max(followUntil, now + 12_000L);
+        speak("잘 못 알아들었어요. 다시 말씀해 주세요");
+        again(500);
     }
 
     /** 목적지로 길안내 (이때만 목적지 화면을 띄움) */
@@ -580,9 +617,11 @@ final class WakeWord {
                 askedUntil = 0;
                 NavListenerService.log("이어서 들음: \"" + s0 + "\"");
                 if (handle(s0, !asked)) return true;
-                if (asked) { // "조아야" → "네" → "OO 가자": 이때만 목적지 화면
-                    NavListenerService.log("목적지로 봄: \"" + s0 + "\"");
-                    goDest(s0);
+                if (asked) { // "조아야" → "네" → "OO 가자": 장소 말일 때만 목적지 화면
+                    if (destLike(s0)) {
+                        NavListenerService.log("목적지로 봄: \"" + s0 + "\"");
+                        goDest(s0);
+                    } else notUnderstood(s0);
                     return true;
                 }
             }
@@ -602,8 +641,9 @@ final class WakeWord {
             if (rest.replaceAll("[\\s.,!?~]", "").length() < 2) rest = ""; // "하이 좋아" → 남은 "아" 같은 찌꺼기는 버림
             NavListenerService.log("부르는 말 들음: \"" + s + "\"");
             if (!rest.isEmpty() && handle(rest, false)) return true;
-            if (!rest.isEmpty()) { // 명령도 AI도 아닌 말 → 목적지
-                goDest(rest);
+            if (!rest.isEmpty()) { // 명령도 AI도 아닌 말: 장소 말이면 목적지, 아니면 다시 물음
+                if (destLike(rest)) goDest(rest);
+                else notUnderstood(rest);
                 return true;
             }
             // "조아야"만 부름 → 화면은 그대로 두고 소리로만 "네" 하고 다음 말을 기다림

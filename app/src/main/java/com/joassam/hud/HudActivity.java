@@ -95,8 +95,18 @@ public class HudActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("hud", MODE_PRIVATE);
+        // HUD 화면은 무조건 하나: 먼저 떠 있던 HUD가 있으면 닫음 (겹치면 마이크·화면이 서로 간섭)
+        HudActivity old = current != null ? current.get() : null;
+        if (old != null && old != this && !old.isFinishing()) {
+            old.finish();
+            NavListenerService.log("겹쳐 뜬 HUD 화면 하나 닫음 (HUD는 하나만)");
+        }
         current = new java.lang.ref.WeakReference<>(this);
         // HUD 밖에서 부른 명령으로 HUD가 켜진 경우: 뜬 뒤 그 명령 실행
+        final String pendSay = getIntent() != null ? getIntent().getStringExtra("say") : null;
+        if (pendSay != null) new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (!isFinishing()) say(pendSay);
+        }, 1200);
         final String pendVoice = getIntent() != null ? getIntent().getStringExtra("voice") : null;
         final String pendBrain = getIntent() != null ? getIntent().getStringExtra("brain") : null;
         if (pendVoice != null || pendBrain != null) {
@@ -366,6 +376,16 @@ public class HudActivity extends Activity {
         HudActivity a = current != null ? current.get() : null;
         if (a == null || a.isFinishing()) return false;
         return a.voiceCommand(said);
+    }
+
+    /** HUD를 띄우거나(이미 떠 있으면 그대로) 소리로 알림 — 운전 중엔 화면을 못 보니 말로 */
+    static void announce(android.content.Context c, String msg) {
+        HudActivity h = current != null ? current.get() : null;
+        if (h != null && !h.isFinishing()) {
+            h.runOnUiThread(() -> h.say(msg));
+            return;
+        }
+        openWith(c, "say", msg);
     }
 
     private void say(String msg) {

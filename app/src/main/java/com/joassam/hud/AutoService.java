@@ -88,10 +88,10 @@ public class AutoService extends Service {
                 // 메인폰 핫스팟이 붙을 시간을 조금 기다렸다가 판단
                 handler.postDelayed(AutoService.this::onPowerOn, 8000);
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(i.getAction())) {
-                // 사진 찍으려 폰을 들거나 케이블이 살짝 빠진 것일 수 있으니 20초 기다렸다 판단
+                // 시동 꺼짐은 3초 만에 처리 (케이블만 빠진 경우는 차가 움직이는 중이면 아래에서 걸러냄)
                 handler.removeCallbacks(confirmOff);
                 offTries = 0;
-                handler.postDelayed(confirmOff, 20_000);
+                handler.postDelayed(confirmOff, 3_000);
             }
         }
     };

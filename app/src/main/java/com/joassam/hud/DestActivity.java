@@ -747,7 +747,7 @@ public class DestActivity extends Activity {
      * 이유가 무엇이든) 티맵을 내리고 "어디로 갈까요?"를 다시 물음. 사람이 티맵을 만지는 중이면 더 기다림.
      */
     static void armWatchdog(android.content.Context app, String label) {
-        armWatchdog(app, label, 50_000L);
+        armWatchdog(app, label, 25_000L);
     }
 
     /** 티맵이 "검색 결과 없음"을 띄우면 기다리지 않고 바로 다시 물음 */
@@ -777,16 +777,11 @@ public class DestActivity extends Activity {
                     return;
                 }
                 wdCheck = null;
-                NavListenerService.log("'" + label + "' 길안내가 시작되지 않음 → 티맵 닫고 다시 물어봄");
-                TmapA11yService.pressHome();
-                wd.postDelayed(() -> {
-                    try {
-                        app.startActivity(new Intent(app, DestActivity.class).putExtra("retry", true)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
-                    } catch (Exception e) {
-                        NavListenerService.log("다시 묻기 화면 못 띄움: " + e.getMessage());
-                    }
-                }, 800);
+                // 오래 붙잡지 않음: 티맵을 강제로 끄고 바로 HUD로 돌아가 소리로 알림 (다시 부르면 됨)
+                NavListenerService.log("'" + label + "' 길안내가 시작되지 않음 → 티맵 강제 종료하고 HUD로");
+                TmapA11yService.forceCloseTmap("목적지 '" + label + "' 길안내 못 함");
+                wd.postDelayed(() -> HudActivity.announce(app,
+                        "목적지를 못 찾았어요. 하이 조아 하고 다시 말씀해 주세요"), 1800);
             }
         };
         if (wdCheck != null) wd.removeCallbacks(wdCheck);
@@ -814,7 +809,7 @@ public class DestActivity extends Activity {
                         .setPackage(TmapA11yService.TMAP)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
-                armWatchdog(getApplicationContext(), label, u.contains("goalx") ? 50_000L : 35_000L);
+                armWatchdog(getApplicationContext(), label, u.contains("goalx") ? 25_000L : 18_000L);
                 NavListenerService.log("목적지 '" + dest + "' → 티맵 " + (u.contains("goalx") ? "길안내(좌표 " + String.format(Locale.ROOT, "%.4f,%.4f", ll[0], ll[1]) + ")" : "검색(좌표 못 찾음)") + " 실행");
                 finish();
                 return;

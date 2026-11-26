@@ -70,6 +70,7 @@
             android:name=".HudActivity"
             android:exported="false"
             android:launchMode="singleTask"
+            android:resizeableActivity="false"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"

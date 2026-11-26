@@ -1169,6 +1169,23 @@ public class TmapA11yService extends AccessibilityService {
         }, 1500);
     }
 
+    /** 티맵 강제 종료: 홈으로 내보낸 뒤 뒤에 남은 티맵을 끔 (목적지 못 찾음·화면 멈춤 때) */
+    static void forceCloseTmap(String why) {
+        TmapA11yService a = instance;
+        NavListenerService.stoppingTmapAt = System.currentTimeMillis(); // 이걸 '도착'으로 보지 않게
+        if (a == null) return;
+        a.handler.post(() -> {
+            a.performGlobalAction(GLOBAL_ACTION_HOME);
+            a.handler.postDelayed(() -> {
+                try {
+                    ((android.app.ActivityManager) a.getSystemService(ACTIVITY_SERVICE)).killBackgroundProcesses(TMAP);
+                } catch (Throwable ignored) {
+                }
+                NavListenerService.log("티맵 강제 종료 (" + why + ")");
+            }, 1200);
+        });
+    }
+
     /** 글자 비교용: 띄어쓰기·숫자·동그라미 숫자·괄호 빼기 ("안내 종료 ①" → "안내종료") */
     static String norm(String t) {
         return t.replaceAll("[\\s0-9\u2460-\u2473\u24EA\u2776-\u277F()\\[\\]]", "");
