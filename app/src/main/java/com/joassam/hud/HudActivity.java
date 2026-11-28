@@ -727,6 +727,11 @@ public class HudActivity extends Activity {
     static volatile float lastKmh = 0;
     static volatile long lastKmhAt = 0;
 
+    /** 지금 확실히 달리는 중 (최근 5초 안 위치에서 시속 15km 넘음) */
+    static boolean movingNow() {
+        return System.currentTimeMillis() - lastKmhAt < 5_000L && lastKmh > 15f;
+    }
+
     static boolean movingRecently() {
         return System.currentTimeMillis() - lastKmhAt < 15_000L && lastKmh > 8f;
     }

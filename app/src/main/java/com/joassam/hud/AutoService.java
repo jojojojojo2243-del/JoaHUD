@@ -94,12 +94,15 @@ public class AutoService extends Service {
                 // 시동 꺼짐은 3초 만에 처리 (케이블만 빠진 경우는 차가 움직이는 중이면 아래에서 걸러냄)
                 handler.removeCallbacks(confirmOff);
                 offTries = 0;
+                unplugAt = System.currentTimeMillis();
+                NavListenerService.log("충전 끊김 감지");
                 handler.postDelayed(confirmOff, 3_000);
             }
         }
     };
 
     private int offTries = 0;
+    private long unplugAt = 0;
 
     private final Runnable confirmOff = new Runnable() {
         @Override
@@ -109,10 +112,12 @@ public class AutoService extends Service {
                 return;
             }
             // 차가 아직 움직이고 있으면 시동이 꺼진 게 아님 (케이블만 빠짐) → 1분까지 더 기다림
-            if (HudActivity.movingRecently() && offTries < 6) {
-                if (offTries == 0) NavListenerService.log("충전이 끊겼지만 차가 움직이는 중 → 시동 꺼짐 아님 (케이블 확인)");
+            // 차가 지금 확실히 달리는 중(최근 5초 안 시속 15km 넘음)이면 케이블만 빠진 것 → 3초마다 다시 봄, 최대 약 20초
+            // (예전: 10초마다 최대 1분 — 멈추기 직전 속도가 남아 있으면 HUD가 한참 안 꺼졌음)
+            if (HudActivity.movingNow() && offTries < 7) {
+                if (offTries == 0) NavListenerService.log("충전이 끊겼지만 차가 달리는 중 → 조금 더 보고 판단");
                 offTries++;
-                handler.postDelayed(this, 10_000);
+                handler.postDelayed(this, 3_000);
                 return;
             }
             onPowerOff();
@@ -159,7 +164,7 @@ public class AutoService extends Service {
         if (!ignOn) return;
         ignOn = false;
         offAt = System.currentTimeMillis();
-        NavListenerService.log("🔑 시동 꺼짐(충전 끊김)");
+        NavListenerService.log("🔑 시동 꺼짐(충전 끊김" + (unplugAt > 0 ? ", " + (System.currentTimeMillis() - unplugAt) / 1000 + "초 만에 처리" : "") + ")");
         updateNoti("대기 중 — 시동을 기다립니다");
         // 도착 전에 시동 끔 (휴게소·마트 등) → 다음 시동 때 "아까 가던 곳으로 계속 갈까요?"
         if (NavListenerService.tmapGuiding()) DestActivity.saveResume(this);
