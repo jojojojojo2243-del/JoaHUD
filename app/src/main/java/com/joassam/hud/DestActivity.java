@@ -310,6 +310,28 @@ public class DestActivity extends Activity {
         speak(ro(name) + " 안내합니다", () -> go(name));
     }
 
+    /** 가던 곳 이어갈지 물은 뒤의 대답: 1=이어서, 2=아니(새로 묻기), 0=다른 장소 이름 */
+    static int resumeAnswer(String a, String resumeName) {
+        String s = a.replace(" ", "").replaceAll("[.,!?~]", "");
+        String rn = resumeName == null ? "" : resumeName.replace(" ", "");
+        if (!rn.isEmpty() && s.contains(rn)) return 1; // 가던 곳 이름을 다시 말함
+        String core = s.replaceAll("(요|해줘|해주세요|주세요)$", "");
+        if (core.matches("(네|예|응|어|그래|좋아|오케이|맞아|ㅇㅇ|그렇게|계속|이어서|거기로?)?(계속)?(가|가자|가줘|안내|해|갈게|갈래)?") && !core.isEmpty()) return 1;
+        String rest = resumeStrip(s).replace(" ", "");
+        if (rest.isEmpty()) return 2; // "아니", "다른 데", "싫어" 처럼 장소 이름이 없음
+        return 0;
+    }
+
+    /** "아니 세종 CGV로 가자" → "세종 CGV" */
+    static String resumeStrip(String a) {
+        String s = a.trim();
+        s = s.replaceAll("^(아니요|아니야|아니|아뇨|노|싫어|됐어|말고)[\\s,.]*", "");
+        s = s.replaceAll("(거기|그곳|아까\\s*가던\\s*데|아까\\s*거기)\\s*말고\\s*", "");
+        s = s.replaceAll("^(다른\\s*데|다른\\s*곳|새로)\\s*", "");
+        s = s.replaceAll("\\s*(으로|로)?\\s*(가자|가줘|가 줘|갈래|가요|갈게|안내해 줘|안내해줘|안내|가)\\s*[.!?]*$", "");
+        return s.trim();
+    }
+
     /** 들은 말 처리 */
     /** "그냥 가", "HUD", "없어" 같은 말: 목적지 없이 바로 HUD */
     static boolean hudOnlyWord(String a) {
@@ -324,12 +346,13 @@ public class DestActivity extends Activity {
             String a0 = alts.get(0).replace(" ", "");
             String rn = p.getString("resume_name", "");
             String ru = p.getString("resume_url", "");
-            if (a0.length() <= 10 && a0.matches(".*(아니|아뇨|됐어|새로|다른|싫어|말고|안가|노).*")) {
+            int ans = resumeAnswer(a0, rn);
+            if (ans == 2) { // "아니", "다른 데" 만 말함 → 새로 물음
                 clearResume(this);
                 ask("어디로 갈까요?");
                 return;
             }
-            if (a0.length() <= 10 && a0.matches(".*(네|예|응|^어$|그래|계속|가자|가줘|좋아|오케이|맞아|ㅇㅇ|그렇게).*")) {
+            if (ans == 1) {
                 clearResume(this);
                 NavListenerService.log("가던 곳 '" + rn + "' 이어서 안내");
                 if (!ru.isEmpty()) {
@@ -341,6 +364,11 @@ public class DestActivity extends Activity {
                 } else speak(ro(rn) + " 이어서 안내할게요", () -> go(rn));
                 return;
             }
+            // 다른 곳 이름을 말함 ("세종 CGV 가자", "아니 집으로") → 가던 곳은 버리고 그 장소로
+            String other = resumeStrip(alts.get(0));
+            NavListenerService.log("가던 곳 대신 '" + other + "' 로");
+            alts = new ArrayList<>(alts);
+            alts.set(0, other);
             clearResume(this); // 다른 곳 이름을 바로 말함 → 아래에서 목적지로 처리
         }
         // HUD가 떠 있으면 "뒤집어", "흰색으로", "티맵 꺼" 같은 명령도 여기서 받음
