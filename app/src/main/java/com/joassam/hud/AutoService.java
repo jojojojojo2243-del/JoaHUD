@@ -144,11 +144,14 @@ public class AutoService extends Service {
         dndTried = false;
         // 방해 금지는 여기서 바로 켜지 않음: 집·사무실에서 충전기에 꽂아도 '시동'으로 보여 켜지던 문제.
         // 차가 실제로 움직이기 시작하면 check()에서 켬
-        if (HudActivity.visible || DestActivity.visible) return;
+        if (DestActivity.visible) return;
         Intent i;
+        // 시동 걸면 단순 모드여도 "어디로 갈까요?"를 물음 (HUD가 이미 떠 있어도). 티맵이 이미 안내 중이면 DestActivity가 알아서 안 묻고 HUD로
         if (DestActivity.hasResume(this)) i = new Intent(this, DestActivity.class).putExtra("resume", true);
-        else if (p.getBoolean("ign_dest", true) && !simple(this)) i = new Intent(this, DestActivity.class);
+        else if (p.getBoolean("ign_dest", true)) i = new Intent(this, DestActivity.class);
+        else if (HudActivity.visible) return;
         else i = new Intent(this, HudActivity.class);
+        NavListenerService.log("시동 → 목적지 묻기");
         startFromBackground(i);
     }
 
