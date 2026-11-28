@@ -49,6 +49,8 @@ final class WakeWord {
     }
     private boolean onDeviceWorked = false;
     private int onDeviceBadStarts = 0;
+    /** 폰 안 인식기가 알아들은 것 없이 연달아 꼬인 횟수 (한 번 됐던 뒤에도 셈) */
+    private int odStreak = 0;
     static volatile String status = "";
 
     WakeWord(android.content.Context a) {
@@ -453,6 +455,7 @@ final class WakeWord {
             clientErrs = 0;
             errors = 0;
             if (onDevice) onDeviceWorked = true;
+            odStreak = 0;
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             long nowR = System.currentTimeMillis();
             if (r != null && !r.isEmpty() && (nowR < ttsUntil + 1200 || isEcho(r.get(0)))) {
@@ -497,6 +500,7 @@ final class WakeWord {
                 micAliveAt = System.currentTimeMillis();
                 clientErrs = 0;
                 errors = 0;
+                odStreak = 0;
                 again(200);
                 return;
             }
@@ -512,6 +516,15 @@ final class WakeWord {
                 clientErrs++;
                 try { sr.cancel(); sr.destroy(); } catch (Exception ignored) { }
                 sr = null;
+                // 폰 안 인식기가 한 번 됐더라도, 알아들은 것 없이 4번 연달아 꼬이면 3분 동안 구글 인식기로 들음
+                // (예전엔 '한 번이라도 됐으면' 계속 폰 안 인식기만 다시 만들어서, 오류 5만 나고 아무것도 못 들었음)
+                if (onDevice && ++odStreak >= 4) {
+                    odStreak = 0;
+                    onDeviceRestUntil = n + 180_000L;
+                    NavListenerService.log("폰 안 인식기가 계속 꼬임(오류 " + e + ") → 3분 동안 구글 인식기로 듣기");
+                    again(500);
+                    return;
+                }
                 // 구글 인식기(띵 소리)로 넘기지 않고 폰 안 인식기를 새로 만들어 다시 들음 — 자주 꼬이면 조금씩 쉬었다가
                 again(e == 8 ? 1500 : Math.min(3000, 600L * clientErrs));
                 return;
